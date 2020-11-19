@@ -294,6 +294,18 @@ def checkShellOut(cmdList, lockGui=False):
                "Constants.DEFAULT_EDITOR variable.".format(cmd=cmdList[0])
         showErrorMessageBox(text, title="ERROR Launching Log Editor!")
 
+def checkShellOutItview(cmdList):
+    """Run the provided command and check it's results.
+    Display an error message if the command failed
+    @type: list<string>
+    @param: The command to run as a space separated list.
+    """
+    try:
+        subprocess.check_call(cmdList)
+    except subprocess.CalledProcessError as e:
+        showErrorMessageBox(str(e), title='Error running Itview command')
+    except Exception as e:
+        showErrorMessageBox(str(e), title='Unable to open output in Itview')
 
 def exceptionOutput(e):
     """Returns formatted lines to pass to the logger
@@ -464,8 +476,11 @@ def popupView(file, facility=None):
         editor_from_env = os.getenv('EDITOR')
         if editor_from_env:
             job_log_cmd = editor_from_env.split()
-        elif QtGui.qApp.settings.contains('LogEditor'):
+        elif QtGui.qApp.settings.contains('LogEditor') and (
+                len(QtGui.qApp.settings.value("LogEditor").strip()) > 0):
             job_log_cmd = QtGui.qApp.settings.value("LogEditor")
+            if not isinstance(job_log_cmd, list):
+                job_log_cmd = job_log_cmd.split()
         else:
             job_log_cmd = cuegui.Constants.DEFAULT_EDITOR.split()
         job_log_cmd.append(str(file))
