@@ -28,8 +28,11 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.log4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.support.JdbcDaoSupport;
+import org.springframework.core.env.Environment;
+import org.springframework.stereotype.Component;
 
 import com.imageworks.spcue.AllocationInterface;
 import com.imageworks.spcue.DispatchFrame;
@@ -45,20 +48,9 @@ import com.imageworks.spcue.dao.DispatcherDao;
 import com.imageworks.spcue.grpc.host.ThreadMode;
 import com.imageworks.spcue.util.CueUtil;
 
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_DISPATCH_FRAME_BY_JOB_AND_HOST;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_DISPATCH_FRAME_BY_JOB_AND_PROC;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_DISPATCH_FRAME_BY_LAYER_AND_HOST;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_DISPATCH_FRAME_BY_LAYER_AND_PROC;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_JOBS_BY_GROUP;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_JOBS_BY_LOCAL;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_JOBS_BY_SHOW;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_LOCAL_DISPATCH_FRAME_BY_JOB_AND_HOST;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_LOCAL_DISPATCH_FRAME_BY_JOB_AND_PROC;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_LOCAL_DISPATCH_FRAME_BY_LAYER_AND_HOST;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_LOCAL_DISPATCH_FRAME_BY_LAYER_AND_PROC;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_SHOWS;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.FIND_UNDER_PROCED_JOB_BY_FACILITY;
-import static com.imageworks.spcue.dao.postgres.DispatchQuery.HIGHER_PRIORITY_JOB_BY_FACILITY_EXISTS;
+import javax.annotation.PostConstruct;
+
+import static com.imageworks.spcue.dao.postgres.DispatchQuery.*;
 
 
 /**
@@ -66,9 +58,20 @@ import static com.imageworks.spcue.dao.postgres.DispatchQuery.HIGHER_PRIORITY_JO
  *
  * @category DAO
  */
+@Component
 public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
 
+    @Autowired
+    private Environment env;
+
+    private boolean dispatcherBalancedMode = false; // default
     private static final Logger logger = Logger.getLogger(DispatcherDaoJdbc.class);
+
+    @PostConstruct
+    public void init() {
+        this.dispatcherBalancedMode = env.getProperty(
+                "dispatcher.balanced_mode", Boolean.class, false);
+    }
 
     public static final RowMapper<String> PKJOB_MAPPER =
         new RowMapper<String>() {
@@ -185,7 +188,9 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
             }
 
             result.addAll(getJdbcTemplate().query(
-                    FIND_JOBS_BY_SHOW,
+                    this.dispatcherBalancedMode ?
+                            FIND_JOBS_BY_SHOW_BALANCED_MODE :
+                            FIND_JOBS_BY_SHOW_PRIORITY_MODE,
                     PKJOB_MAPPER,
                     s.getShowId(), host.getFacilityId(), host.os,
                     host.idleCores, host.idleMemory,
@@ -221,7 +226,9 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
     public Set<String> findDispatchJobs(DispatchHost host, GroupInterface g) {
         LinkedHashSet<String> result = new LinkedHashSet<String>(5);
         result.addAll(getJdbcTemplate().query(
-                FIND_JOBS_BY_GROUP,
+                this.dispatcherBalancedMode ?
+                        FIND_JOBS_BY_GROUP_BALANCED_MODE :
+                        FIND_JOBS_BY_GROUP_PRIORITY_MODE,
                 PKJOB_MAPPER,
                 g.getGroupId(),host.getFacilityId(), host.os,
                 host.idleCores, host.idleMemory,
@@ -383,7 +390,9 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
         LinkedHashSet<String> result = new LinkedHashSet<String>(numJobs);
 
         result.addAll(getJdbcTemplate().query(
-                FIND_JOBS_BY_SHOW,
+                this.dispatcherBalancedMode ?
+                        FIND_JOBS_BY_SHOW_BALANCED_MODE :
+                        FIND_JOBS_BY_SHOW_PRIORITY_MODE,
                 PKJOB_MAPPER,
                 show.getShowId(), host.getFacilityId(), host.os,
                 host.idleCores, host.idleMemory,
