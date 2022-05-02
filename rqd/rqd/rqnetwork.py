@@ -123,6 +123,7 @@ class RunningFrame(object):
             except OSError as e:
                 log.warning(
                     "kill() tried to kill a non-existant pid for: %s Error: %s", self.frameId, e)
+            # pylint: disable=broad-except
             except Exception as e:
                 log.warning("kill() encountered an unknown error: %s", e)
         else:
@@ -184,8 +185,8 @@ class GrpcServer(object):
 
     def shutdown(self):
         """Stops the gRPC server."""
-        log.info('Stopping grpc server.')
-        self.server.stop(0)
+        log.warning('Stopping grpc server.')
+        self.server.stop(10)
 
     def stayAlive(self):
         """Runs forever until killed."""
@@ -213,6 +214,7 @@ class Network(object):
         """Stops the gRPC server."""
         self.grpcServer.shutdown()
         del self.grpcServer
+        log.warning("Stopped grpc server")
 
     def closeChannel(self):
         """Closes the gRPC channel."""
@@ -345,6 +347,9 @@ class RetryOnRpcErrorClientInterceptor(
                     return response
 
                 self._sleeping_policy.sleep(attempt)
+            # pylint: disable=broad-except
+            except Exception:
+                raise
 
     def intercept_unary_unary(self, continuation, client_call_details,
                               request):
