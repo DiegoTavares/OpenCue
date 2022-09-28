@@ -25,8 +25,7 @@ from concurrent import futures
 from random import shuffle
 import abc
 import atexit
-import datetime
-import logging
+import logging as log
 import os
 import platform
 import subprocess
@@ -40,9 +39,6 @@ import rqd.compiled_proto.rqd_pb2_grpc
 import rqd.rqconstants
 import rqd.rqdservicers
 import rqd.rqutil
-
-
-log = logging.getLogger(__name__)
 
 
 class RunningFrame(object):
@@ -75,7 +71,6 @@ class RunningFrame(object):
         self.stime = 0
 
         self.lluTime = 0
-        self.childrenProcs = {}
 
     def runningFrameInfo(self):
         """Returns the RunningFrameInfo object"""
@@ -96,46 +91,9 @@ class RunningFrame(object):
             llu_time=self.lluTime,
             num_gpus=self.runFrame.num_gpus,
             max_used_gpu_memory=self.maxUsedGpuMemory,
-            used_gpu_memory=self.usedGpuMemory,
-            children=self._serializeChildrenProcs()
+            used_gpu_memory=self.usedGpuMemory
         )
         return runningFrameInfo
-
-    def _serializeChildrenProcs(self):
-        """ Collect and serialize children proc stats for protobuf
-            Convert to Kilobytes:
-            * RSS (Resident set size) measured in pages
-            * Statm size measured in pages
-            * Stat size measured in bytes
-
-        :param data: dictionary
-        :return: serialized children proc host stats
-        :rtype: rqd.compiled_proto.report_pb2.ChildrenProcStats
-        """
-        childrenProc = rqd.compiled_proto.report_pb2.ChildrenProcStats()
-        for proc, values in self.childrenProcs.items():
-            procStats = rqd.compiled_proto.report_pb2.ProcStats()
-            procStatFile = rqd.compiled_proto.report_pb2.Stat()
-            procStatmFile = rqd.compiled_proto.report_pb2.Statm()
-
-            procStatFile.pid = proc
-            procStatFile.name = values["name"] if values["name"] else ""
-            procStatFile.state = values["state"]
-            procStatFile.vsize = values["vsize"]
-            procStatFile.rss = values["rss"]
-
-            procStatmFile.size = values["statm_size"]
-            procStatmFile.rss = values["statm_rss"]
-            # pylint: disable=no-member
-            procStats.stat.CopyFrom(procStatFile)
-            procStats.statm.CopyFrom(procStatmFile)
-            procStats.cmdline = " ".join(values["cmd_line"])
-
-            startTime = datetime.datetime.now() - datetime.timedelta(seconds=values["start_time"])
-            procStats.start_time = startTime.strftime("%Y-%m-%d %H:%M%S")
-            childrenProc.children.extend([procStats])
-            # pylint: enable=no-member
-        return childrenProc
 
     def status(self):
         """Returns the status of the frame"""
@@ -143,13 +101,13 @@ class RunningFrame(object):
 
     def kill(self, message=""):
         """Kills the frame"""
-        log.info("Request received: kill")
+        log.info("Request recieved: kill")
         if self.frameAttendantThread is None:
             log.warning(
                 "Kill requested before frameAttendantThread is created for: %s", self.frameId)
-        elif self.frameAttendantThread.is_alive() and self.pid is None:
+        elif self.frameAttendantThread.isAlive() and self.pid is None:
             log.warning("Kill requested before pid is available for: %s", self.frameId)
-        elif self.frameAttendantThread.is_alive():
+        elif self.frameAttendantThread.isAlive():
             # pylint: disable=broad-except
             try:
                 if not self.killMessage and message:
@@ -254,9 +212,9 @@ class Network(object):
 
     def stopGrpc(self):
         """Stops the gRPC server."""
-        if self.grpcServer:
-            self.grpcServer.shutdown()
-            del self.grpcServer
+        self.grpcServer.shutdown()
+        del self.grpcServer
+        log.warning("Stopped grpc server")
 
     def closeChannel(self):
         """Closes the gRPC channel."""
@@ -282,8 +240,8 @@ class Network(object):
             shuffle(cuebots)
             if len(cuebots) > 0:
                 self.channel = grpc.insecure_channel('%s:%s' % (cuebots[0],
-                                                                rqd.rqconstants.CUEBOT_GRPC_PORT))
-                self.channel = grpc.intercept_channel(self.channel, *interceptors)
+                                                                rqd.rqconstants.CUEBOT_GRPC_PORT),
+                                                     *interceptors)
             atexit.register(self.closeChannel)
 
     def __getReportStub(self):
@@ -389,6 +347,9 @@ class RetryOnRpcErrorClientInterceptor(
                     return response
 
                 self._sleeping_policy.sleep(attempt)
+            # pylint: disable=broad-except
+            except Exception:
+                raise
 
     def intercept_unary_unary(self, continuation, client_call_details,
                               request):

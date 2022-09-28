@@ -3,7 +3,7 @@
 # RQD3:    Start/stop rqd3 services
 #
 # chkconfig:    345 98 02
-# description:  Opencue RQD agent
+# description:  RQD for opencue
 #
 
 # Source function library.
@@ -28,7 +28,7 @@ idle_restart()
 {
     echo -n "Requesting idle restart of openrqd services:"
     cd ${RQD_PATH}
-    daemon "rqd/cuerqd.py --restart &>/dev/null || :"
+    daemon "./cuerqd.py -restart &>/dev/null || :"
     echo ""
 }
 
