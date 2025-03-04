@@ -67,7 +67,7 @@ def reopen_stdout_stderr(log_path):
     so if LOG_PATH fails to open, stdout and stderr will remain
     unchanged.
     """
-    log_fd = os.open(log_path, os.O_CREAT|os.O_WRONLY|os.O_TRUNC, 0o644)
+    log_fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o644)
 
     for f in [sys.stdout, sys.stderr]:
         fileno = f.fileno()
@@ -148,6 +148,7 @@ def daemonize(log_path=None, chdir_to_root=True):
         except OSError:
             pass
 
+
 def setupLogging():
     """Sets up the logging for RQD.
     Logs to /var/log/messages"""
@@ -167,7 +168,8 @@ def setupLogging():
             else:
                 logfile = logging.handlers.SysLogHandler()
         elif platform.system() == 'Windows':
-            logfile = logging.FileHandler(os.path.expandvars('%TEMP%/openrqd.log'))
+            logfile = logging.FileHandler(
+                os.path.expandvars('%TEMP%/openrqd.log'))
         else:
             logfile = logging.handlers.SysLogHandler()
         logfile.setLevel(rqd.rqconstants.FILE_LOG_LEVEL)
@@ -178,7 +180,7 @@ def setupLogging():
 def setup_sentry():
     """Set up sentry if a SENTRY_DSN_PATH is configured"""
     sentry_dsn_path = rqd.rqconstants.SENTRY_DSN_PATH
-    if sentry_dsn_path is not None:
+    if sentry_dsn_path is None:
         return
 
     # Not importing sentry at the toplevel to avoid an unecessary dependency
@@ -218,7 +220,8 @@ def main():
         sys.exit(1)
 
     try:
-        opts, _ = getopt.getopt(sys.argv[1:], 'hdc:', ['help', 'daemon', 'nimbyoff', 'update'])
+        opts, _ = getopt.getopt(sys.argv[1:], 'hdc:', [
+                                'help', 'daemon', 'nimbyoff', 'update'])
     except getopt.GetoptError:
         usage()
         sys.exit(1)
