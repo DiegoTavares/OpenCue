@@ -128,6 +128,7 @@ pub struct RunnerConfig {
 pub enum LoggerType {
     #[serde(rename = "file")]
     File,
+    // This is a placeholder for new logging solutions
     // #[serde(rename = "loki")]
     // Loki,
 }
@@ -252,7 +253,7 @@ impl Config {
     pub fn load_file_and_env<P: AsRef<str>>(path: P) -> Result<Self, RqdConfigError> {
         let config = ConfigBase::builder()
             .add_source(File::with_name(path.as_ref()))
-            .add_source(Environment::with_prefix("VNPM").separator("_"))
+            .add_source(Environment::with_prefix("RQD").separator("_"))
             .build();
 
         config
