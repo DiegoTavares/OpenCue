@@ -590,6 +590,8 @@ impl LinuxSystem {
             }
         }
 
+        info!("Failed to parse PSS");
+
         Err(miette!(
             "Could not parse PSS from /proc/{}/smaps_rollup",
             pid
