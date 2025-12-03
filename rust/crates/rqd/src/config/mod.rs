@@ -122,7 +122,7 @@ impl Default for MachineConfig {
             nimby_start_retry_interval: Duration::from_secs(60 * 5), // 5 min
             nimby_display_xauthority_path: "/home/{username}/Xauthority".to_string(),
             memory_oom_margin_percentage: 96,
-            memory_metric: MemoryMetric::Rss,
+            memory_metric: MemoryMetric::Pss,
         }
     }
 }
