@@ -144,13 +144,18 @@ impl ClusterFeedBuilder {
     /// database, filtered to the configured facility and ignore tags.
     pub async fn build(self) -> Result<ClusterFeed> {
         let clusters = if self.clusters.is_empty() && self.entire_shows.is_empty() {
-            let all = ClusterFeed::load_clusters(&self.ignore_tags, None).await?;
+            let all =
+                ClusterFeed::load_clusters(self.facility_id, &self.ignore_tags, None).await?;
             ClusterFeed::filter_clusters(all, &self.ignore_tags)
         } else {
             let mut clusters: HashSet<Cluster> = self.clusters.into_iter().collect();
             if !self.entire_shows.is_empty() {
-                let show_clusters =
-                    ClusterFeed::load_clusters(&self.ignore_tags, Some(self.entire_shows)).await?;
+                let show_clusters = ClusterFeed::load_clusters(
+                    self.facility_id,
+                    &self.ignore_tags,
+                    Some(self.entire_shows),
+                )
+                .await?;
                 clusters.extend(show_clusters);
             }
             ClusterFeed::filter_clusters(clusters.into_iter().collect(), &self.ignore_tags)
@@ -201,6 +206,7 @@ impl ClusterFeed {
     /// * `Ok(ClusterFeed)` - Successfully loaded cluster feed
     /// * `Err(miette::Error)` - Failed to load clusters from database
     pub async fn load_clusters(
+        facility_id: Option<Uuid>,
         ignore_tags: &[String],
         shows_filter: Option<Vec<String>>,
     ) -> Result<Vec<Cluster>> {
@@ -208,8 +214,8 @@ impl ClusterFeed {
 
         // Fetch clusters for both facilitys+shows+tags and just tags
         let mut clusters_stream = cluster_dao
-            .fetch_alloc_clusters(shows_filter.clone())
-            .chain(cluster_dao.fetch_non_alloc_clusters(shows_filter));
+            .fetch_alloc_clusters(facility_id, shows_filter.clone())
+            .chain(cluster_dao.fetch_non_alloc_clusters(facility_id, shows_filter));
         let mut clusters = Vec::new();
         let mut manual_tags: HashMap<(Uuid, Uuid), HashSet<Tag>> = HashMap::new();
         let mut hardware_tags: HashMap<(Uuid, Uuid), HashSet<Tag>> = HashMap::new();
