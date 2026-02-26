@@ -155,8 +155,8 @@ impl ClusterDao {
 
     /// Fetches all non-allocation clusters (MANUAL and HOSTNAME tags).
     ///
-    /// Returns clusters defined by manual or hostname-based tags that are not
-    /// tied to specific facility/show allocations.
+    /// Returns clusters defined by manual or hostname-based tags
+    /// tied to their specific facility/show.
     ///
     /// # Returns
     ///
