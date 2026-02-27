@@ -103,6 +103,9 @@ WHERE str_tag_type = 'ALLOC'
     AND sh.str_name = ANY($2)
 "#;
 
+// As this query is not filtered by show, each show+subscription will
+// return a row, meaning repeated tags are returned, but each one bound
+// to their own show
 static QUERY_NON_ALLOC_CLUSTERS: &str = r#"
 SELECT DISTINCT
     host_tag.str_tag as tag,

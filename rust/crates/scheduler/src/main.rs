@@ -187,7 +187,7 @@ impl JobQueueCli {
             for alloc_tag in &alloc_tags {
                 let show_id = cluster::get_show_id(&alloc_tag.show)
                     .await
-                    .wrap_err("Could not find show {}.")?;
+                    .wrap_err(format!("Could not find show {}.", alloc_tag.show))?;
                 clusters.push(Cluster::single_tag(
                     *facility_id,
                     show_id,
@@ -202,7 +202,7 @@ impl JobQueueCli {
             for manual_tag in &manual_tags {
                 let show_id = cluster::get_show_id(&manual_tag.show)
                     .await
-                    .wrap_err("Could not find show {}.")?;
+                    .wrap_err(format!("Could not find show {}.", manual_tag.show))?;
                 clusters.push(Cluster::multiple_tag(
                     *facility_id,
                     show_id,
@@ -218,6 +218,8 @@ impl JobQueueCli {
             }
         } else if !alloc_tags.is_empty() {
             Err(miette!("Alloc tag requires a valid facility"))?
+        } else if !manual_tags.is_empty() {
+            Err(miette!("Manual tag requires a valid facility"))?
         }
 
         let builder = match facility_id {
