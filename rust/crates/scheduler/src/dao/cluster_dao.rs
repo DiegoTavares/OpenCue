@@ -69,7 +69,7 @@ FROM host_tag
     JOIN show sh ON sub.pk_show = sh.pk_show
 WHERE str_tag_type = 'ALLOC'
     AND sh.b_active = true
-    AND a.pk_facility = $1
+    AND LOWER(a.pk_facility) = LOWER($1)
 "#;
 
 static QUERY_ALLOC_CLUSTERS_WITH_SHOW_NAMES: &str = r#"
@@ -99,7 +99,7 @@ FROM host_tag
     JOIN show sh ON sub.pk_show = sh.pk_show
 WHERE str_tag_type = 'ALLOC'
     AND sh.b_active = true
-    AND a.pk_facility = $1
+    AND LOWER(a.pk_facility) = LOWER($1)
     AND sh.str_name = ANY($2)
 "#;
 
@@ -127,7 +127,7 @@ JOIN host h on h.pk_host = host_tag.pk_host
 JOIN alloc a ON a.pk_alloc = h.pk_alloc
 JOIN subscription s ON a.pk_alloc = s.pk_alloc
 WHERE str_tag_type <> 'ALLOC'
-    AND a.pk_facility = $1
+    AND LOWER(a.pk_facility) = LOWER($1)
 "#;
 
 static QUERY_NON_ALLOC_CLUSTERS_WITH_SHOW_NAMES: &str = r#"
@@ -157,7 +157,7 @@ JOIN alloc a ON a.pk_alloc = h.pk_alloc
 JOIN subscription s ON a.pk_alloc = s.pk_alloc
 JOIN show sh ON sh.pk_show = s.pk_show
 WHERE str_tag_type <> 'ALLOC'
-    AND a.pk_facility = $1
+    AND LOWER(a.pk_facility) = LOWER($1)
     AND sh.str_name = ANY($2)
 "#;
 
