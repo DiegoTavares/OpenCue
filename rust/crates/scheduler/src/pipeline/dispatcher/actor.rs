@@ -1023,7 +1023,7 @@ mod tests {
 
     use super::*;
     use crate::models::{CoreSize, DispatchFrame, Host};
-    use bytesize::{ByteSize, KB};
+    use bytesize::ByteSize;
     use opencue_proto::host::ThreadMode;
     use uuid::Uuid;
 
