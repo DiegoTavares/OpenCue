@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "d04a08f3d901",
+  "session_id": "f0ad4a54-0e2f-4887-888a-00bfc9178423",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T02:45:29.021963Z",
+  "branch": "orchestrator",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "rust/crates/scheduler/src/orchestrator/dao.rs",
+    "rust/crates/scheduler/src/orchestrator/distributor.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5dec7b1ea596",
+  "token_usage": {
+    "input_tokens": 11563,
+    "cache_creation_tokens": 69786,
+    "cache_read_tokens": 852404,
+    "output_tokens": 15099,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T02:45:28.744333Z",
+    "agent_lines": 167,
+    "human_added": 377,
+    "human_modified": 67,
+    "human_removed": 0,
+    "total_committed": 611,
+    "agent_percentage": 27.33224222585925
+  }
+}

@@ -1,0 +1,18 @@
+On 
+
+[@scheduler](file:///Users/dtavares/dev/OpenCue/rust/crates/scheduler)
+
+ when running on production alongside cuebot (different shows on each), I'm currently seeing a lot of the following warning on the scheduler logs. I suspect either scheduler is racing itself when trying to book the same host for different async tasks or racing cuebot as hosts are shared between shows based on allocations. Please investigate the code to verify my assumption and suggest other causes. Besides that, help me to decide if this is a problem worth investing time or just an expected sympthom of running both cuebot and scheduler booking logics at the same environment:
+
+ WARN cue_scheduler::pipeline::dispatcher::actor: Wasn't able to dispatch all frames: FailedToUpdateResources( × (57b07e8d-6813-4fc5-8f71-132e968f4e29) Failed to update host resources
+├─▶ error returned from database: unable to allocate additional memory
+╰─▶ unable to allocate additional memory
+)
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+I'll have to work this on a different branch. Please write the plan to a file on the root
