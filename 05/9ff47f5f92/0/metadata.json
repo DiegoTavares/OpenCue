@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "059ff47f5f92",
+  "session_id": "1a800193-c277-46d3-8c57-528e7e4fad16",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-06T22:37:42.683334Z",
+  "branch": "sched_subs_lock",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "rust/crates/scheduler/src/allocation.rs",
+    "rust/crates/scheduler/src/dao/allocation_dao.rs",
+    "rust/crates/scheduler/src/dao/host_dao.rs",
+    "rust/crates/scheduler/src/pipeline/dispatcher/actor.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1ab2636172d2",
+  "token_usage": {
+    "input_tokens": 885,
+    "cache_creation_tokens": 191584,
+    "cache_read_tokens": 2633624,
+    "output_tokens": 33002,
+    "api_call_count": 37
+  },
+  "summary": {
+    "intent": "Investigate and fix database lock contention on the host, layer_stat, subscription, and transactionid tables in the OpenCue scheduler (Rust) and cuebot (Java) systems.",
+    "outcome": "Identified subscription hot-row updates as the root cause (Theory 1) and implemented a deferred in-memory accounting solution in the Rust scheduler that batches subscription DB writes into a background flush cycle instead of updating on every frame dispatch.",
+    "learnings": {
+      "repo": [
+        "The Rust scheduler's AllocationService already used an in-memory cache (booked_cores) for bookability checks — the DB subscription write was redundant for scheduling decisions.",
+        "The proc table is the ground truth for active bookings; subscription.int_cores is a denormalized counter that can be reconstructed from proc via recompute_booked_from_proc().",
+        "A BEFORE ROW trigger (verify_subscription) fires on every subscription UPDATE when int_burst is unchanged and int_cores increases — using LEAST(int_cores + delta, int_burst) in the flush query prevents the trigger from ever raising an exception.",
+        "Java's procCreated() (ProcDaoJdbc.java:601-665) holds row-level locks on host and subscription across 7 sequential table updates in one transaction, compounding contention.",
+        "Java uses SELECT FOR UPDATE NOWAIT for host locking while Rust uses pg_try_advisory_lock — these don't conflict at the lock level but still race at the UPDATE step on the same host row."
+      ],
+      "code": [
+        {
+          "path": "rust/crates/scheduler/src/dao/host_dao.rs",
+          "line": 357,
+          "end_line": 365,
+          "finding": "UPDATE_SUBSCRIPTION SQL and its execution were removed from update_resources() — subscription is no longer written per frame dispatch."
+        },
+        {
+          "path": "rust/crates/scheduler/src/dao/allocation_dao.rs",
+          "finding": "Added recompute_booked_from_proc() (JOINs proc→host→alloc→subscription) and flush_subscription_delta() (uses LEAST to cap at burst, preventing trigger exceptions)."
+        },
+        {
+          "path": "rust/crates/scheduler/src/allocation.rs",
+          "line": 123,
+          "end_line": 123,
+          "finding": "Flush failures now panic (after user feedback) rather than logging an error, because a failed flush followed by a cache refresh from stale DB values would silently enable overbooking. Panic forces restart and self-healing via proc-based cache reconstruction."
+        },
+        {
+          "path": "rust/crates/scheduler/src/pipeline/dispatcher/actor.rs",
+          "finding": "show_id, alloc_id, alloc_name, core_delta, gpu_delta must be captured from virtual_proc before it is moved into dispatch_virtual_proc; record_booking() is called after successful commit."
+        },
+        {
+          "path": "cuebot/src/main/resources/conf/ddl/postgres/migrations/V1__Initial_schema.sql",
+          "line": 2907,
+          "end_line": 2924,
+          "finding": "verify_subscription trigger fires BEFORE UPDATE on subscription FOR EACH ROW when int_burst unchanged and int_cores increases — runs PL/pgSQL while the row lock is held, and on exception the lock is held through the full rollback path."
+        }
+      ],
+      "workflow": [
+        "When a DB flush failure can corrupt in-memory state that persists across the error (causing silent overbooking), panic + restart is preferable to error logging — especially when startup has a self-healing reconstruction path.",
+        "For hot-row contention, check whether the DB write is actually required for correctness or is just a denormalized counter that can be batched — in-memory caches often already provide the necessary consistency for the write path.",
+        "The allocation refresh interval (CONFIG.queue.allocation_refresh_interval, ~3s) sets the staleness bound for the deferred flush approach."
+      ]
+    },
+    "friction": [
+      "Multiple read iterations of actor.rs were needed before having enough context to implement the change safely (virtual_proc ownership/move issue).",
+      "The verify_subscription trigger was not initially considered in the solution design and required a follow-up redesign of the flush query to use LEAST() to avoid trigger exceptions."
+    ],
+    "open_items": [
+      "Concurrent flush from multiple scheduler instances is handled by PostgreSQL row-level serialization, but this has not been load-tested — worth verifying under high-concurrency scenarios.",
+      "The ~3s staleness window for CueGUI and other external readers of subscription.int_cores is acceptable but should be documented for operators.",
+      "layer_stat read-write contention (Theory 4) and the overbooking/retry issue (Theory 5) were identified but not addressed — may still contribute to lock metrics at very high throughput.",
+      "Java cuebot's long multi-table transaction in procCreated() (Theory 2) was not addressed — still holds host and subscription locks across 7 steps.",
+      "The recompute_booked_from_proc() failure on startup currently falls back to subscription table values with a warning rather than panicking — consistency with the flush panic policy should be revisited."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-06T22:37:07.402405Z",
+    "agent_lines": 199,
+    "human_added": 105,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 311,
+    "agent_percentage": 63.9871382636656
+  }
+}

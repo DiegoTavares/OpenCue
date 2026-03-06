@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "059ff47f5f92",
+  "strategy": "manual-commit",
+  "branch": "sched_subs_lock",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "rust/crates/scheduler/src/allocation.rs",
+    "rust/crates/scheduler/src/dao/allocation_dao.rs",
+    "rust/crates/scheduler/src/dao/host_dao.rs",
+    "rust/crates/scheduler/src/pipeline/dispatcher/actor.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/05/9ff47f5f92/0/metadata.json",
+      "transcript": "/05/9ff47f5f92/0/full.jsonl",
+      "context": "/05/9ff47f5f92/0/context.md",
+      "content_hash": "/05/9ff47f5f92/0/content_hash.txt",
+      "prompt": "/05/9ff47f5f92/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 885,
+    "cache_creation_tokens": 191584,
+    "cache_read_tokens": 2633624,
+    "output_tokens": 33002,
+    "api_call_count": 37
+  }
+}
