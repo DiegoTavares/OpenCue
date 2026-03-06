@@ -1,0 +1,54 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "57fcdec6f3b4",
+  "session_id": "9c533635-1480-4cb2-bf1d-cba01ed5a68a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-06T23:28:22.81368Z",
+  "branch": "sched_subs_lock",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "rust/crates/scheduler/src/dao/allocation_dao.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "de0f4fa7ae4e",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 17102,
+    "cache_read_tokens": 166883,
+    "output_tokens": 1415,
+    "api_call_count": 6
+  },
+  "summary": {
+    "intent": "Review PR changes to verify all SQL column names are correct across modified queries.",
+    "outcome": "Found and fixed incorrect column names in the RECOMPUTE_BOOKED_FROM_PROC query in allocation_dao.rs — `int_cores` and `int_gpus` corrected to `int_cores_reserved` and `int_gpus_reserved` on the proc table.",
+    "learnings": {
+      "repo": [
+        "The `proc` table uses `int_cores_reserved` and `int_gpus_reserved` (not `int_cores`/`int_gpus`).",
+        "The `subscription` table uses `int_cores` and `int_gpus` (without `_reserved` suffix).",
+        "OpenCue Rust scheduler SQL queries live in rust/crates/scheduler/src/dao/"
+      ],
+      "code": [
+        {
+          "path": "rust/crates/scheduler/src/dao/allocation_dao.rs",
+          "finding": "RECOMPUTE_BOOKED_FROM_PROC query had wrong column names: p.int_cores and p.int_gpus should be p.int_cores_reserved and p.int_gpus_reserved. FLUSH_SUBSCRIPTION_DELTA query was correct."
+        }
+      ],
+      "workflow": [
+        "When reviewing PR diffs with SQL queries, cross-reference column names against actual DB schema rather than assuming consistency across tables."
+      ]
+    },
+    "friction": [
+      "Column naming is inconsistent between tables (proc uses _reserved suffix, subscription does not), which makes it easy to write incorrect queries by analogy."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-06T23:28:14.362475Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
