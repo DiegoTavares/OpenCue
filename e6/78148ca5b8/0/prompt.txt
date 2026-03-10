@@ -1,0 +1,163 @@
+Connection leak errors on cuebot logs. When running on production, some users are reporting frame dependencies are not being cleared, which is something that happens at cuebot on the 
+
+[@FrameCompleteHandler.java](file:///Users/dtavares/dev/OpenCue/cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java)
+
+ handlePostFrameCompleteOperations logic. Here's the stack of the error:
+
+2026-03-09 17:17:05,650 WARN HikariPool-1 housekeeper com.zaxxer.hikari.pool.ProxyLeakTask - Connection leak detection triggered for org.postgresql.jdbc.PgConnection@5b206639 on thread pool-4-thread-5, stack trace follows
+java.lang.Exception: Apparent connection leak detected
+    at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:128) ~[HikariCP-3.4.1.jar!/:?]
+    at org.springframework.jdbc.datasource.DataSourceTransactionManager.doBegin(DataSourceTransactionManager.java:263) ~[spring-jdbc-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.support.AbstractPlatformTransactionManager.getTransaction(AbstractPlatformTransactionManager.java:376) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.createTransactionIfNecessary(TransactionAspectSupport.java:572) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:360) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:99) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:186) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:747) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:689) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at com.imageworks.spcue.dispatcher.DispatchSupportService$$EnhancerBySpringCGLIB$$8233ac3d.unbookProc(<generated>) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.FrameCompleteHandler.handlePostFrameCompleteOperations(FrameCompleteHandler.java:507) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.FrameCompleteHandler$1.run(FrameCompleteHandler.java:184) ~[classes!/:?]
+    at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128) [?:?]
+    at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628) [?:?]
+    at java.lang.Thread.run(Thread.java:831) [?:?]
+2026-03-09 17:17:05,705 WARN HikariPool-1 housekeeper com.zaxxer.hikari.pool.ProxyLeakTask - Connection leak detection triggered for org.postgresql.jdbc.PgConnection@76d1a926 on thread pool-4-thread-1, stack trace follows
+java.lang.Exception: Apparent connection leak detected
+    at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:128) ~[HikariCP-3.4.1.jar!/:?]
+    at org.springframework.jdbc.datasource.DataSourceTransactionManager.doBegin(DataSourceTransactionManager.java:263) ~[spring-jdbc-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.support.AbstractPlatformTransactionManager.getTransaction(AbstractPlatformTransactionManager.java:376) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.createTransactionIfNecessary(TransactionAspectSupport.java:572) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:360) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:99) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:186) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:747) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:689) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at com.imageworks.spcue.dispatcher.DispatchSupportService$$EnhancerBySpringCGLIB$$8233ac3d.unbookProc(<generated>) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.FrameCompleteHandler.handlePostFrameCompleteOperations(FrameCompleteHandler.java:457) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.FrameCompleteHandler$1.run(FrameCompleteHandler.java:184) ~[classes!/:?]
+    at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128) [?:?]
+    at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628) [?:?]
+    at java.lang.Thread.run(Thread.java:831) [?:?]
+2026-03-09 17:17:05,863 WARN HikariPool-1 housekeeper com.zaxxer.hikari.pool.ProxyLeakTask - Connection leak detection triggered for org.postgresql.jdbc.PgConnection@2bf96d48 on thread pool-5-thread-6, stack trace follows
+java.lang.Exception: Apparent connection leak detected
+    at com.zaxxer.hikari.HikariDataSource.getConnection(HikariDataSource.java:128) ~[HikariCP-3.4.1.jar!/:?]
+    at org.springframework.jdbc.datasource.DataSourceTransactionManager.doBegin(DataSourceTransactionManager.java:263) ~[spring-jdbc-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.support.AbstractPlatformTransactionManager.getTransaction(AbstractPlatformTransactionManager.java:376) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.createTransactionIfNecessary(TransactionAspectSupport.java:572) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionAspectSupport.invokeWithinTransaction(TransactionAspectSupport.java:360) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.transaction.interceptor.TransactionInterceptor.invoke(TransactionInterceptor.java:99) ~[spring-tx-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.ReflectiveMethodInvocation.proceed(ReflectiveMethodInvocation.java:186) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$CglibMethodInvocation.proceed(CglibAopProxy.java:747) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at org.springframework.aop.framework.CglibAopProxy$DynamicAdvisedInterceptor.intercept(CglibAopProxy.java:689) ~[spring-aop-5.2.1.RELEASE.jar!/:5.2.1.RELEASE]
+    at com.imageworks.spcue.dispatcher.DispatchSupportService$$EnhancerBySpringCGLIB$$8233ac3d.increaseReservedMemory(<generated>) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.HostReportHandler.handleMemoryReservations(HostReportHandler.java:797) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.HostReportHandler.handleMemoryUsage(HostReportHandler.java:610) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.HostReportHandler.handleHostReport(HostReportHandler.java:245) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.commands.DispatchHandleHostReport$1.wrapDispatchCommand(DispatchHandleHostReport.java:54) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.commands.DispatchCommandTemplate.execute(DispatchCommandTemplate.java:31) ~[classes!/:?]
+    at com.imageworks.spcue.dispatcher.commands.DispatchHandleHostReport.run(DispatchHandleHostReport.java:56) ~[classes!/:?]
+    at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1128) [?:?]
+    at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:628) [?:?]
+    at java.lang.Thread.run(Thread.java:831) [?:?]
+    
+    
+    Help me to investigate the cause.
+
+
+<context ref="file:///Users/dtavares/dev/OpenCue/cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java">
+# File outline for /Users/dtavares/dev/OpenCue/cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java
+
+public class FrameCompleteHandler [L72-808]
+ private static final Logger logger [L74]
+ private static final Random randomNumber [L76]
+ private HostManager hostManager [L78]
+ private JobManager jobManager [L79]
+ private RedirectManager redirectManager [L80]
+ private BookingManager bookingManager [L81]
+ private DispatchQueue dispatchQueue [L82]
+ private BookingQueue bookingQueue [L83]
+ private Dispatcher dispatcher [L84]
+ private Dispatcher localDispatcher [L85]
+ private JobManagerSupport jobManagerSupport [L86]
+ private DispatchSupport dispatchSupport [L87]
+ private JmsMover jsmMover [L88]
+ private WhiteboardDao whiteboardDao [L90]
+ private ServiceDao serviceDao [L91]
+ private ShowDao showDao [L92]
+ private Environment env [L93]
+ private KafkaEventPublisher kafkaEventPublisher [L94]
+ private MonitoringEventBuilder monitoringEventBuilder [L95]
+ private PrometheusMetricsCollector prometheusMetrics [L96]
+ private final AtomicLong lastUnbook [L104]
+ private static final int UNBOOK_EXPIRE_MS [L109]
+ private boolean shutdown [L114]
+ private boolean satisfyDependOnlyOnFrameSuccess [L119]
+ public boolean getSatisfyDependOnlyOnFrameSuccess() [L121-123]
+ public void setSatisfyDependOnlyOnFrameSuccess(boolean ) [L125-127]
+ public FrameCompleteHandler(Environment ) [L130-134]
+ public void handleFrameCompleteReport( FrameCompleteReport ) [L141-247]
+  public void run() [L182-191]
+  public void run() [L202-209]
+  public void run() [L214-222]
+ public void handlePostFrameCompleteOperations(VirtualProc , FrameCompleteReport , DispatchJob , DispatchFrame , FrameState , FrameDetail ) [L266-567]
+ public static final FrameState determineFrameState(DispatchJob , LayerDetail , DispatchFrame , FrameCompleteReport ) [L589-644]
+ public boolean isShutdown() [L646-648]
+ public synchronized void shutdown() [L650-653]
+ public HostManager getHostManager() [L655-657]
+ public void setHostManager(HostManager ) [L659-661]
+ public JobManager getJobManager() [L663-665]
+ public void setJobManager(JobManager ) [L667-669]
+ public RedirectManager getRedirectManager() [L671-673]
+ public void setRedirectManager(RedirectManager ) [L675-677]
+ public DispatchQueue getDispatchQueue() [L679-681]
+ public void setDispatchQueue(DispatchQueue ) [L683-685]
+ public BookingQueue getBookingQueue() [L687-689]
+ public void setBookingQueue(BookingQueue ) [L691-693]
+ public Dispatcher getDispatcher() [L695-697]
+ public void setDispatcher(Dispatcher ) [L699-701]
+ public JobManagerSupport getJobManagerSupport() [L703-705]
+ public void setJobManagerSupport(JobManagerSupport ) [L707-709]
+ public DispatchSupport getDispatchSupport() [L711-713]
+ public void setDispatchSupport(DispatchSupport ) [L715-717]
+ public Dispatcher getLocalDispatcher() [L719-721]
+ public void setLocalDispatcher(Dispatcher ) [L723-725]
+ public BookingManager getBookingManager() [L727-729]
+ public void setBookingManager(BookingManager ) [L731-733]
+ public JmsMover getJmsMover() [L735-737]
+ public void setJmsMover(JmsMover ) [L739-741]
+ public WhiteboardDao getWhiteboardDao() [L743-745]
+ public void setWhiteboardDao(WhiteboardDao ) [L747-749]
+ public ServiceDao getServiceDao() [L751-753]
+ public void setServiceDao(ServiceDao ) [L755-757]
+ public ShowDao getShowDao() [L759-761]
+ public void setShowDao(ShowDao ) [L763-765]
+ public KafkaEventPublisher getKafkaEventPublisher() [L767-769]
+ public void setKafkaEventPublisher(KafkaEventPublisher ) [L771-773]
+ public void setMonitoringEventBuilder(MonitoringEventBuilder ) [L775-777]
+ public PrometheusMetricsCollector getPrometheusMetrics() [L779-781]
+ public void setPrometheusMetrics(PrometheusMetricsCollector ) [L783-785]
+ private void publishFrameCompleteEvent(FrameCompleteReport , DispatchFrame , FrameDetail , FrameState , VirtualProc ) [L792-806]
+
+Showing symbols 1-70 (total symbols: 70)
+
+</context>
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Plan for implementing #3
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+You will need to set export JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-11.jdk/Contents/Home
+
+---
+
+[Request interrupted by user for tool use]

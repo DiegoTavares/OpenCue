@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "e678148ca5b8",
+  "session_id": "11aa1ad7-4a0f-42c9-8b30-9c4337cb552c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-10T01:59:30.050699Z",
+  "branch": "retry_dependencies",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java",
+    "cuebot/src/test/java/com/imageworks/spcue/test/dispatcher/FrameCompleteHandlerTests.java"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b06cabbb37df",
+  "token_usage": {
+    "input_tokens": 7688,
+    "cache_creation_tokens": 102086,
+    "cache_read_tokens": 1057262,
+    "output_tokens": 10544,
+    "api_call_count": 23
+  },
+  "summary": {
+    "intent": "Investigate and fix HikariCP connection leak errors in OpenCue's cuebot causing frame dependencies to not be cleared after frame completion.",
+    "outcome": "Root cause identified (thread pool count exceeding connection pool size) and fix #3 implemented — resilient error handling around satisfyWhatDependsOn in FrameCompleteHandler. Build was interrupted before completion.",
+    "learnings": {
+      "repo": [
+        "OpenCue cuebot uses HikariCP with a default maximum-pool-size of 20, configured in cuebot/src/main/resources/opencue.properties",
+        "The dispatch queue (pool-4) and report queue (pool-5) are separate thread pools that both compete for the same HikariCP connection pool",
+        "satisfyWhatDependsOn is called at FrameCompleteHandler.java:285 inside handlePostFrameCompleteOperations; exceptions here can silently drop dependency clearing, leaving frames stuck in DEPEND state",
+        "The exception handler at lines 551-565 only attempts to unbook the proc on failure, without retrying or logging dependency satisfaction failures",
+        "DependManagerService.satisfyDepend is @Transactional and acquires its own connection per call"
+      ],
+      "code": [
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java",
+          "line": 285,
+          "end_line": 285,
+          "finding": "satisfyWhatDependsOn call that can silently fail under connection exhaustion"
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java",
+          "line": 457,
+          "end_line": 507,
+          "finding": "Two stack trace hit points within handlePostFrameCompleteOperations: unbookProc at 507 and another at 457"
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java",
+          "line": 551,
+          "end_line": 565,
+          "finding": "Exception handler that only unbooks proc but does not handle dependency satisfaction failure"
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dispatcher/FrameCompleteHandler.java",
+          "line": 184,
+          "end_line": 184,
+          "finding": "Runnable entry point where handlePostFrameCompleteOperations is called from thread pool"
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dispatcher/HostReportHandler.java",
+          "line": 797,
+          "end_line": 797,
+          "finding": "increaseReservedMemory called here also triggers @Transactional connection acquisition, contributing to pool exhaustion"
+        }
+      ],
+      "workflow": [
+        "cuebot requires Java 11 (temurin-11); must set JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-11.jdk/Contents/Home before building",
+        "HikariCP's 30s leak-detection-threshold can produce false positives when threads legitimately wait for connections under pool exhaustion — the warning is a symptom, not the root cause",
+        "Plans are being saved to /Users/dtavares/.claude/plans/ for cross-session reference"
+      ]
+    },
+    "friction": [
+      "Java version mismatch required manual JAVA_HOME export — not documented in project setup",
+      "Gradle build caching made it hard to confirm recompilation had occurred, requiring a clean build",
+      "Build was interrupted by user before completion, so the fix could not be verified"
+    ],
+    "open_items": [
+      "Increase maximum-pool-size from 20 to ~46 to cover max thread count across all pools (fix #1)",
+      "Increase leak-detection-threshold from 30s to 120s to reduce false positive warnings (fix #2)",
+      "Complete and verify the FrameCompleteHandler resilient error handling change (fix #3) — build was interrupted",
+      "Add tests for the dependency-clearing failure path in FrameCompleteHandlerTests.java",
+      "Investigate whether the same silent-failure pattern exists in other places that call satisfyWhatDependsOn or satisfyDepend"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-10T01:59:10.703743Z",
+    "agent_lines": 160,
+    "human_added": 250,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 410,
+    "agent_percentage": 39.02439024390244
+  }
+}
