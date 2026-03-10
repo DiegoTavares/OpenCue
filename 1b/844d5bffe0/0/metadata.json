@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "1b844d5bffe0",
+  "session_id": "e44d5a38-3a26-47f4-b507-cb2093066425",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-10T02:44:59.055631Z",
+  "branch": "retry_dependencies",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cuebot/src/test/java/com/imageworks/spcue/test/dispatcher/FrameCompleteHandlerTests.java"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8e0b3b72d7e8",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 21668,
+    "cache_read_tokens": 215064,
+    "output_tokens": 3637,
+    "api_call_count": 10
+  },
+  "summary": {
+    "intent": "Fix failing unit test `testDependRetryExhausted` in `FrameCompleteHandlerTests` which was asserting dependency retry exhaustion behavior.",
+    "outcome": "Fixed the test by separating shared `callCount` array into independent counters for frame-level and layer-level spies, ensuring each spy independently tracks retry failures.",
+    "learnings": {
+      "repo": [
+        "OpenCue's cuebot uses a `satisfyWhatDependsOn` method at both frame and layer levels when handling post-frame-complete operations with retry logic.",
+        "Dependency retry exhaustion is tested by verifying `dependCount` and frame state (DEPEND vs WAITING) after `handlePostFrameCompleteOperations`."
+      ],
+      "code": [
+        {
+          "path": "cuebot/src/test/java/com/imageworks/spcue/test/dispatcher/FrameCompleteHandlerTests.java",
+          "line": 509,
+          "end_line": 534,
+          "finding": "The `executeDependWithRetry` helper used a single shared `callCount` array for both FrameInterface and LayerInterface spies. When failCount=3, the layer spy's invocation count exceeded 3 so it succeeded despite the intent being full retry exhaustion. Fix: use separate counters per spy."
+        }
+      ],
+      "workflow": [
+        "When multiple test spies/mocks share a single invocation counter, cross-spy state bleed can cause false positives in retry exhaustion tests — always use independent counters per mock."
+      ]
+    },
+    "friction": [
+      "The bug was non-obvious because the shared counter pattern worked correctly for partial-failure cases (failCount=1, failCount=2) but silently broke the full-exhaustion case (failCount=3)."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-10T02:44:49.137487Z",
+    "agent_lines": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 100
+  }
+}

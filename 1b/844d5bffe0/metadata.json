@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "1b844d5bffe0",
+  "strategy": "manual-commit",
+  "branch": "retry_dependencies",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cuebot/src/test/java/com/imageworks/spcue/test/dispatcher/FrameCompleteHandlerTests.java"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1b/844d5bffe0/0/metadata.json",
+      "transcript": "/1b/844d5bffe0/0/full.jsonl",
+      "context": "/1b/844d5bffe0/0/context.md",
+      "content_hash": "/1b/844d5bffe0/0/content_hash.txt",
+      "prompt": "/1b/844d5bffe0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 21668,
+    "cache_read_tokens": 215064,
+    "output_tokens": 3637,
+    "api_call_count": 10
+  }
+}
