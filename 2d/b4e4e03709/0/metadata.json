@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "2db4e4e03709",
+  "session_id": "e5909e36-79c6-4197-bea9-6fbb9f7e1e9d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-10T16:56:19.368861Z",
+  "branch": "opencue_io_design",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docs/_includes/header_custom.html",
+    "docs/_sass/color_schemes/opencue-dark.scss",
+    "docs/_sass/color_schemes/opencue.scss",
+    "docs/index.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1a0cb1600f1a",
+  "checkpoint_transcript_start": 23,
+  "transcript_lines_at_start": 23,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-10T16:56:19.349303Z",
+    "agent_lines": 772,
+    "human_added": 4,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 776,
+    "agent_percentage": 99.48453608247422
+  }
+}
