@@ -1,0 +1,55 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "955bdc262336",
+  "session_id": "1d335087-ccb0-4a0c-99f4-df71dad103a6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-10T02:44:17.320973Z",
+  "branch": "retry_dependencies",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/testing-pipeline.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "af8ad2374421",
+  "checkpoint_transcript_start": 68,
+  "transcript_lines_at_start": 68,
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 3487,
+    "cache_read_tokens": 226120,
+    "output_tokens": 1056,
+    "api_call_count": 6
+  },
+  "summary": {
+    "intent": "Reduce the verbosity of test output in the Cuebot CI/CD pipeline, which was printing full stack traces, SQL queries, and debug logs.",
+    "outcome": "Removed the `--info` flag from both Gradle test commands (CY2023 and CY2024 jobs) in the testing pipeline, dropping Gradle to the default lifecycle log level.",
+    "learnings": {
+      "repo": [
+        "The Cuebot CI pipeline has two parallel jobs — one for CY2023 and one for CY2024 — both in .github/workflows/testing-pipeline.yml",
+        "Gradle's --info flag was the root cause of verbose output: it enables Spring, Hibernate, and embedded Postgres debug/info logging including full SQL queries and stack traces",
+        "--stacktrace is a separate Gradle flag that only affects build errors, not test output verbosity — safe to keep"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/testing-pipeline.yml",
+          "finding": "Both CY2023 and CY2024 Cuebot test jobs used `--info` on Gradle commands, causing excessive CI log verbosity"
+        }
+      ],
+      "workflow": [
+        "Gradle log levels: lifecycle (default) shows pass/fail and assertion errors; --info adds Spring/Hibernate/SQL debug noise; --stacktrace only affects Gradle build-level errors",
+        "When CI logs are too noisy, check for Gradle --info or --debug flags before investigating application-level logging config"
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-10T02:44:06.844415Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}

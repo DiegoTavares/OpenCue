@@ -1,0 +1,70 @@
+Running tests for the changes on this branch failed on cicd with the following stacktrace (just a snipped, the actual file is gigantic):
+
+2026-03-10T02:06:15.6575613Z Gradle Test Executor 1 finished executing tests.
+2026-03-10T02:06:16.9631082Z 
+2026-03-10T02:06:16.9636608Z 
+2026-03-10T02:06:16.9637188Z > Task :test FAILED
+2026-03-10T02:06:16.9638884Z 02:06:15.389 [SpringContextShutdownHook] DEBUG org.springframework.context.support.GenericApplicationContext - Closing org.springframework.context.support.GenericApplicationContext@37606fee, started on Tue Mar 10 02:05:06 UTC 2026
+2026-03-10T02:06:16.9641121Z 02:06:15.403 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.399 UTC [386] LOG:  received fast shutdown request
+2026-03-10T02:06:16.9643793Z 02:06:15.403 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.399 UTC [386] LOG:  aborting any active transactions
+2026-03-10T02:06:16.9645770Z 02:06:15.403 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.402 UTC [386] LOG:  background worker "logical replication launcher" (PID 394) exited with exit code 1
+2026-03-10T02:06:16.9648197Z 02:06:15.412 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.406 UTC [1731] FATAL:  terminating autovacuum process due to administrator command
+2026-03-10T02:06:16.9649865Z 02:06:15.415 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.415 UTC [389] LOG:  shutting down
+2026-03-10T02:06:16.9651358Z 02:06:15.477 [postgres:pid(386)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-03-10 02:06:15.477 UTC [386] LOG:  database system is shut down
+2026-03-10T02:06:16.9652788Z 02:06:15.496 [pg_ctl:pid(2006)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - waiting for server to shut down.... done
+2026-03-10T02:06:16.9653887Z 02:06:15.496 [pg_ctl:pid(2006)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - server stopped
+2026-03-10T02:06:16.9655406Z 02:06:15.497 [postgres-90f03b9e-7e2b-434f-bdc7-dd82a7d1a7fe-closer] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 90f03b9e-7e2b-434f-bdc7-dd82a7d1a7fe shut down postmaster in 00:00:00.109
+2026-03-10T02:06:16.9657780Z 02:06:15.514 [SpringContextShutdownHook] DEBUG org.springframework.context.support.DefaultLifecycleProcessor - Stopping beans in phase 2147483647
+2026-03-10T02:06:16.9659702Z 02:06:15.514 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED paused.
+2026-03-10T02:06:16.9662114Z 02:06:15.515 [SpringContextShutdownHook] DEBUG org.springframework.context.support.DefaultLifecycleProcessor - Bean 'org.springframework.scheduling.quartz.SchedulerFactoryBean#0' completed its stop procedure
+2026-03-10T02:06:16.9664249Z 02:06:15.517 [SpringContextShutdownHook] INFO org.springframework.scheduling.quartz.SchedulerFactoryBean - Shutting down Quartz Scheduler
+2026-03-10T02:06:16.9666488Z 02:06:15.517 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED shutting down.
+2026-03-10T02:06:16.9668749Z 02:06:15.517 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED paused.
+2026-03-10T02:06:16.9670474Z 02:06:15.517 [SpringContextShutdownHook] DEBUG org.quartz.simpl.SimpleThreadPool - Shutting down threadpool...
+2026-03-10T02:06:16.9671775Z 02:06:15.517 [SpringContextShutdownHook] DEBUG org.quartz.simpl.SimpleThreadPool - Shutdown of threadpool complete.
+2026-03-10T02:06:16.9673609Z 02:06:15.518 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED shutdown complete.
+2026-03-10T02:06:16.9675660Z 02:06:15.518 [SpringContextShutdownHook] INFO org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor - Shutting down ExecutorService 'killPool'
+2026-03-10T02:06:16.9677578Z 02:06:15.519 [SpringContextShutdownHook] INFO com.imageworks.common.spring.remoting.GrpcServer - gRPC server shutting down on cueBotGrpc at port 8453
+2026-03-10T02:06:16.9679539Z 02:06:15.532 [SpringContextShutdownHook] INFO org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor - Shutting down ExecutorService 'launchQueue'
+2026-03-10T02:06:16.9681207Z 02:06:15.532 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportHandler - Shutting down HostReportHandler.
+2026-03-10T02:06:16.9682764Z 02:06:15.533 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportQueue - Shutting down report pool, currently 0 active threads.
+2026-03-10T02:06:16.9684373Z 02:06:15.533 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.FrameCompleteHandler - Shutting down FrameCompleteHandler.
+2026-03-10T02:06:16.9686200Z 02:06:15.533 [SpringContextShutdownHook] DEBUG org.apache.activemq.jms.pool.PooledConnectionFactory - Stopping the PooledConnectionFactory, number of connections in cache: 0
+2026-03-10T02:06:16.9687943Z 02:06:15.535 [SpringContextShutdownHook] INFO com.imageworks.spcue.monitoring.KafkaEventPublisher - Kafka event publisher shut down
+2026-03-10T02:06:16.9689441Z 02:06:15.535 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportQueue - Shutting down report pool, currently 0 active threads.
+2026-03-10T02:06:16.9691120Z 02:06:15.535 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool DispatchQueue, currently 0 active threads.
+2026-03-10T02:06:16.9692349Z 02:06:15.536 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool ManageQueue, currently 0 active threads.
+2026-03-10T02:06:16.9693566Z 02:06:15.537 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool BookingQueue, currently 0 active threads.
+2026-03-10T02:06:16.9694705Z Finished generating test XML results (0.288 secs) into: /__w/OpenCue/OpenCue/cuebot/build/test-results/test
+2026-03-10T02:06:16.9695443Z 701 tests completed, 1 failed
+2026-03-10T02:06:16.9695778Z Generating HTML test report...
+2026-03-10T02:06:16.9696592Z Finished generating test html results (0.276 secs) into: /__w/OpenCue/OpenCue/cuebot/build/reports/tests/test
+2026-03-10T02:06:17.0648150Z 
+2026-03-10T02:06:17.0650749Z FAILURE: Build failed with an exception.
+
+
+What keyworks should I search for to find out which test failed
+
+---
+
+2026-03-10T02:05:48.4843195Z     02:05:48.401 [Test worker] INFO org.springframework.test.context.transaction.TransactionContext - Rolled back transaction for test: [DefaultTestContext@42a75f59 testClass = FrameCompleteHandlerTests, testInstance = com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests@6606a6a8, testMethod = testDependRetryExhausted@FrameCompleteHandlerTests, testException = java.lang.AssertionError: expected:<1> but was:<0>, mergedContextConfiguration = [MergedContextConfiguration@488c5b83 testClass = FrameCompleteHandlerTests, locations = '{}', classes = '{class com.imageworks.spcue.config.TestAppConfig}', contextInitializerClasses = '[]', activeProfiles = '{}', propertySourceLocations = '{}', propertySourceProperties = '{}', contextCustomizers = set[org.springframework.boot.test.autoconfigure.properties.PropertyMappingContextCustomizer@0, org.springframework.boot.test.autoconfigure.web.servlet.WebDriverContextCustomizerFactory$Customizer@64ae105d, org.springframework.boot.test.context.filter.ExcludeFilterContextCustomizer@6dca31eb, org.springframework.boot.test.json.DuplicateJsonObjectContextCustomizerFactory$DuplicateJsonObjectContextCustomizer@ab2e6d2, org.springframework.boot.test.mock.mockito.MockitoContextCustomizer@0], contextLoader = 'org.springframework.test.context.support.AnnotationConfigContextLoader', parent = [null]], attributes = map[[empty]]]
+2026-03-10T02:05:48.4863770Z     02:05:48.401 [Test worker] DEBUG org.springframework.test.context.support.AbstractDirtiesContextTestExecutionListener - After test method: context [DefaultTestContext@42a75f59 testClass = FrameCompleteHandlerTests, testInstance = com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests@6606a6a8, testMethod = testDependRetryExhausted@FrameCompleteHandlerTests, testException = java.lang.AssertionError: expected:<1> but was:<0>, mergedContextConfiguration = [MergedContextConfiguration@488c5b83 testClass = FrameCompleteHandlerTests, locations = '{}', classes = '{class com.imageworks.spcue.config.TestAppConfig}', contextInitializerClasses = '[]', activeProfiles = '{}', propertySourceLocations = '{}', propertySourceProperties = '{}', contextCustomizers = set[org.springframework.boot.test.autoconfigure.properties.PropertyMappingContextCustomizer@0, org.springframework.boot.test.autoconfigure.web.servlet.WebDriverContextCustomizerFactory$Customizer@64ae105d, org.springframework.boot.test.context.filter.ExcludeFilterContextCustomizer@6dca31eb, org.springframework.boot.test.json.DuplicateJsonObjectContextCustomizerFactory$DuplicateJsonObjectContextCustomizer@ab2e6d2, org.springframework.boot.test.mock.mockito.MockitoContextCustomizer@0], contextLoader = 'org.springframework.test.context.support.AnnotationConfigContextLoader', parent = [null]], attributes = map[[empty]]], class annotated with @DirtiesContext [false] with mode [null], method annotated with @DirtiesContext [false] with mode [null].
+2026-03-10T02:05:48.4874352Z 
+2026-03-10T02:05:48.4874900Z com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests > testDependRetryExhausted FAILED
+2026-03-10T02:05:48.4876278Z     java.lang.AssertionError: expected:<1> but was:<0>
+2026-03-10T02:05:48.4876824Z         at org.junit.Assert.fail(Assert.java:88)
+2026-03-10T02:05:48.4877371Z         at org.junit.Assert.failNotEquals(Assert.java:834)
+2026-03-10T02:05:48.4877956Z         at org.junit.Assert.assertEquals(Assert.java:645)
+2026-03-10T02:05:48.4878538Z         at org.junit.Assert.assertEquals(Assert.java:631)
+2026-03-10T02:05:48.4879812Z         at com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests.executeDependWithRetry(FrameCompleteHandlerTests.java:498)
+2026-03-10T02:05:48.4881618Z         at com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests.testDependRetryExhausted(FrameCompleteHandlerTests.java:523)
+2026-03-10T02:05:48.4882621Z 
+2026-03-10T02:05:48.4883017Z com.imageworks.spcue.test.dispatcher.FrameCompleteHandlerTests STANDARD_OUT
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Tests are printing the entire stack trace and even queries, reduce the verbosity of tests running on the cicd pipeline "Build Cuebot and run unit tests"

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "955bdc262336",
+  "strategy": "manual-commit",
+  "branch": "retry_dependencies",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/testing-pipeline.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/5bdc262336/0/metadata.json",
+      "transcript": "/95/5bdc262336/0/full.jsonl",
+      "context": "/95/5bdc262336/0/context.md",
+      "content_hash": "/95/5bdc262336/0/content_hash.txt",
+      "prompt": "/95/5bdc262336/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 3487,
+    "cache_read_tokens": 226120,
+    "output_tokens": 1056,
+    "api_call_count": 6
+  }
+}
