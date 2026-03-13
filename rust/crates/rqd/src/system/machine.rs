@@ -541,6 +541,11 @@ impl MachineMonitor {
         let stats = system.collect_stats()?;
         let gpu_stats = system.collect_gpu_stats();
 
+        info!("Collected: {}({} KIB) total, {}({} KIB) available",
+            stats.total_memory,
+            stats.total_memory / KIB,
+            stats.available_memory / KIB);
+
         Ok(RenderHost {
             name: stats.hostname,
             nimby_enabled: config.nimby_mode,
