@@ -1,0 +1,823 @@
+My pipeline step analyze_cuebot on 
+
+[@sonar-cloud-pipeline.yml](file:///Users/dtavares/dev/OpenCue/.github/workflows/sonar-cloud-pipeline.yml)
+
+ is failing with the following error on github. Help me to find the cause:
+ 
+ 2026-04-06T21:34:15.9017747Z Current runner version: '2.333.1'
+ 2026-04-06T21:34:15.9040983Z ##[group]Runner Image Provisioner
+ 2026-04-06T21:34:15.9041800Z Hosted Compute Agent
+ 2026-04-06T21:34:15.9042439Z Version: 20260213.493
+ 2026-04-06T21:34:15.9043017Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+ 2026-04-06T21:34:15.9043700Z Build Date: 2026-02-13T00:28:41Z
+ 2026-04-06T21:34:15.9044414Z Worker ID: {4f7a6b84-1df2-427e-af23-df5b35ea8875}
+ 2026-04-06T21:34:15.9045064Z Azure Region: westus
+ 2026-04-06T21:34:15.9045922Z ##[endgroup]
+ 2026-04-06T21:34:15.9047337Z ##[group]Operating System
+ 2026-04-06T21:34:15.9047956Z Ubuntu
+ 2026-04-06T21:34:15.9048420Z 22.04.5
+ 2026-04-06T21:34:15.9048868Z LTS
+ 2026-04-06T21:34:15.9049365Z ##[endgroup]
+ 2026-04-06T21:34:15.9049821Z ##[group]Runner Image
+ 2026-04-06T21:34:15.9050399Z Image: ubuntu-22.04
+ 2026-04-06T21:34:15.9050929Z Version: 20260329.74.1
+ 2026-04-06T21:34:15.9052042Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20260329.74/images/ubuntu/Ubuntu2204-Readme.md
+ 2026-04-06T21:34:15.9053543Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20260329.74
+ 2026-04-06T21:34:15.9054422Z ##[endgroup]
+ 2026-04-06T21:34:15.9057342Z ##[group]GITHUB_TOKEN Permissions
+ 2026-04-06T21:34:15.9059469Z Actions: write
+ 2026-04-06T21:34:15.9060105Z ArtifactMetadata: write
+ 2026-04-06T21:34:15.9060684Z Attestations: write
+ 2026-04-06T21:34:15.9061191Z Checks: write
+ 2026-04-06T21:34:15.9061719Z Contents: write
+ 2026-04-06T21:34:15.9062209Z Deployments: write
+ 2026-04-06T21:34:15.9062752Z Discussions: write
+ 2026-04-06T21:34:15.9063301Z Issues: write
+ 2026-04-06T21:34:15.9063789Z Metadata: read
+ 2026-04-06T21:34:15.9064295Z Models: read
+ 2026-04-06T21:34:15.9064822Z Packages: write
+ 2026-04-06T21:34:15.9065321Z Pages: write
+ 2026-04-06T21:34:15.9066312Z PullRequests: write
+ 2026-04-06T21:34:15.9067271Z RepositoryProjects: write
+ 2026-04-06T21:34:15.9067859Z SecurityEvents: write
+ 2026-04-06T21:34:15.9068412Z Statuses: write
+ 2026-04-06T21:34:15.9068875Z ##[endgroup]
+ 2026-04-06T21:34:15.9070947Z Secret source: Actions
+ 2026-04-06T21:34:15.9071856Z Prepare workflow directory
+ 2026-04-06T21:34:15.9472752Z Prepare all required actions
+ 2026-04-06T21:34:15.9518474Z Getting action download info
+ 2026-04-06T21:34:16.3602595Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+ 2026-04-06T21:34:16.6158850Z Complete job name: Analyze Cuebot
+ 2026-04-06T21:34:16.6732742Z ##[group]Checking docker version
+ 2026-04-06T21:34:16.6744899Z ##[command]/usr/bin/docker version --format '{{.Server.APIVersion}}'
+ 2026-04-06T21:34:16.8955285Z '1.48'
+ 2026-04-06T21:34:16.8969375Z Docker daemon API version: '1.48'
+ 2026-04-06T21:34:16.8970084Z ##[command]/usr/bin/docker version --format '{{.Client.APIVersion}}'
+ 2026-04-06T21:34:16.9156391Z '1.48'
+ 2026-04-06T21:34:16.9169187Z Docker client API version: '1.48'
+ 2026-04-06T21:34:16.9174068Z ##[endgroup]
+ 2026-04-06T21:34:16.9177458Z ##[group]Clean up resources from previous jobs
+ 2026-04-06T21:34:16.9182646Z ##[command]/usr/bin/docker ps --all --quiet --no-trunc --filter "label=875a01"
+ 2026-04-06T21:34:16.9321382Z ##[command]/usr/bin/docker network prune --force --filter "label=875a01"
+ 2026-04-06T21:34:16.9451439Z ##[endgroup]
+ 2026-04-06T21:34:16.9451898Z ##[group]Create local container network
+ 2026-04-06T21:34:16.9461936Z ##[command]/usr/bin/docker network create --label 875a01 github_network_bde1d8ceb1c341ec9624c8af86bc9ffd
+ 2026-04-06T21:34:17.0417352Z 2f1f2d503f26dd8a0026b1f370c64e9c6234e914f9b3bf24f61d890ae01d0877
+ 2026-04-06T21:34:17.0435373Z ##[endgroup]
+ 2026-04-06T21:34:17.0458552Z ##[group]Starting job container
+ 2026-04-06T21:34:17.0480745Z ##[command]/usr/bin/docker pull aswf/ci-opencue:2024.1
+ 2026-04-06T21:34:18.0527925Z 2024.1: Pulling from aswf/ci-opencue
+ 2026-04-06T21:34:18.3406784Z d28605281af9: Pulling fs layer
+ 2026-04-06T21:34:18.3408021Z eae4f94d193f: Pulling fs layer
+ 2026-04-06T21:34:18.3409244Z a9fe009b5706: Pulling fs layer
+ 2026-04-06T21:34:18.3410107Z 25c90e8e5a4c: Pulling fs layer
+ 2026-04-06T21:34:18.3410955Z dea941de41e2: Pulling fs layer
+ 2026-04-06T21:34:18.3412245Z 78e15869d18d: Pulling fs layer
+ 2026-04-06T21:34:18.3413074Z df4427944238: Pulling fs layer
+ 2026-04-06T21:34:18.3413891Z 06e0fe352aa6: Pulling fs layer
+ 2026-04-06T21:34:18.3414703Z 864140dc3421: Pulling fs layer
+ 2026-04-06T21:34:18.3415744Z 1c308aef476e: Pulling fs layer
+ 2026-04-06T21:34:18.3416607Z 9d5a52700976: Pulling fs layer
+ 2026-04-06T21:34:18.3417464Z 5f18375df192: Pulling fs layer
+ 2026-04-06T21:34:18.3418299Z 92255abe88d4: Pulling fs layer
+ 2026-04-06T21:34:18.3419142Z 607c3964496f: Pulling fs layer
+ 2026-04-06T21:34:18.3420019Z 01d6e6239440: Pulling fs layer
+ 2026-04-06T21:34:18.3420874Z ba295a7da8de: Pulling fs layer
+ 2026-04-06T21:34:18.3421765Z a639fd3d0d2a: Pulling fs layer
+ 2026-04-06T21:34:18.3422696Z 6f65125722be: Pulling fs layer
+ 2026-04-06T21:34:18.3423624Z 4f4fb700ef54: Pulling fs layer
+ 2026-04-06T21:34:18.3424532Z 9b7bdd3d28e7: Pulling fs layer
+ 2026-04-06T21:34:18.3425615Z e38bbb9490cf: Pulling fs layer
+ 2026-04-06T21:34:18.3426595Z bb93f36029d2: Pulling fs layer
+ 2026-04-06T21:34:18.3427520Z 6e18ca0b56ef: Pulling fs layer
+ 2026-04-06T21:34:18.3428417Z ae4d77164da5: Pulling fs layer
+ 2026-04-06T21:34:18.3429369Z b5960f7e1e90: Pulling fs layer
+ 2026-04-06T21:34:18.3430397Z 1bc6db1c40a2: Pulling fs layer
+ 2026-04-06T21:34:18.3431576Z ab1965dce37e: Pulling fs layer
+ 2026-04-06T21:34:18.3432700Z ed2e8604487e: Pulling fs layer
+ 2026-04-06T21:34:18.3434138Z 4f5abe32a535: Pulling fs layer
+ 2026-04-06T21:34:18.3435315Z 7dfaeca53cbd: Pulling fs layer
+ 2026-04-06T21:34:18.3436659Z 06ff2ae39953: Pulling fs layer
+ 2026-04-06T21:34:18.3437764Z 70e4206506df: Pulling fs layer
+ 2026-04-06T21:34:18.3438935Z 7844ea78e96c: Pulling fs layer
+ 2026-04-06T21:34:18.3440056Z 6fd9ee51b72a: Pulling fs layer
+ 2026-04-06T21:34:18.3441153Z a8e9a3eceed6: Pulling fs layer
+ 2026-04-06T21:34:18.3442236Z a639fd3d0d2a: Waiting
+ 2026-04-06T21:34:18.3443190Z 6f65125722be: Waiting
+ 2026-04-06T21:34:18.3444164Z 4f4fb700ef54: Waiting
+ 2026-04-06T21:34:18.3445128Z 9b7bdd3d28e7: Waiting
+ 2026-04-06T21:34:18.3446217Z e38bbb9490cf: Waiting
+ 2026-04-06T21:34:18.3447073Z bb93f36029d2: Waiting
+ 2026-04-06T21:34:18.3447922Z 6e18ca0b56ef: Waiting
+ 2026-04-06T21:34:18.3448770Z ae4d77164da5: Waiting
+ 2026-04-06T21:34:18.3449715Z b5960f7e1e90: Waiting
+ 2026-04-06T21:34:18.3450566Z 1bc6db1c40a2: Waiting
+ 2026-04-06T21:34:18.3451408Z ab1965dce37e: Waiting
+ 2026-04-06T21:34:18.3452239Z ed2e8604487e: Waiting
+ 2026-04-06T21:34:18.3453294Z 4f5abe32a535: Waiting
+ 2026-04-06T21:34:18.3454243Z 7dfaeca53cbd: Waiting
+ 2026-04-06T21:34:18.3455094Z 06ff2ae39953: Waiting
+ 2026-04-06T21:34:18.3456206Z 70e4206506df: Waiting
+ 2026-04-06T21:34:18.3457144Z 7844ea78e96c: Waiting
+ 2026-04-06T21:34:18.3457958Z 6fd9ee51b72a: Waiting
+ 2026-04-06T21:34:18.3458770Z a8e9a3eceed6: Waiting
+ 2026-04-06T21:34:18.3459596Z 25c90e8e5a4c: Waiting
+ 2026-04-06T21:34:18.3460440Z dea941de41e2: Waiting
+ 2026-04-06T21:34:18.3461269Z 1c308aef476e: Waiting
+ 2026-04-06T21:34:18.3462086Z 78e15869d18d: Waiting
+ 2026-04-06T21:34:18.3462884Z 9d5a52700976: Waiting
+ 2026-04-06T21:34:18.3463687Z df4427944238: Waiting
+ 2026-04-06T21:34:18.3464479Z 5f18375df192: Waiting
+ 2026-04-06T21:34:18.3465258Z 06e0fe352aa6: Waiting
+ 2026-04-06T21:34:18.3466227Z 92255abe88d4: Waiting
+ 2026-04-06T21:34:18.3467018Z 864140dc3421: Waiting
+ 2026-04-06T21:34:18.3467777Z 607c3964496f: Waiting
+ 2026-04-06T21:34:18.3468564Z 01d6e6239440: Waiting
+ 2026-04-06T21:34:18.3469345Z ba295a7da8de: Waiting
+ 2026-04-06T21:34:18.5826197Z eae4f94d193f: Download complete
+ 2026-04-06T21:34:18.5936688Z a9fe009b5706: Verifying Checksum
+ 2026-04-06T21:34:18.5937519Z a9fe009b5706: Download complete
+ 2026-04-06T21:34:18.8407228Z dea941de41e2: Verifying Checksum
+ 2026-04-06T21:34:18.8407870Z dea941de41e2: Download complete
+ 2026-04-06T21:34:18.8807737Z d28605281af9: Verifying Checksum
+ 2026-04-06T21:34:18.8809824Z d28605281af9: Download complete
+ 2026-04-06T21:34:19.0994441Z 78e15869d18d: Verifying Checksum
+ 2026-04-06T21:34:19.0996349Z 78e15869d18d: Download complete
+ 2026-04-06T21:34:19.2068654Z 25c90e8e5a4c: Download complete
+ 2026-04-06T21:34:19.3583999Z 06e0fe352aa6: Verifying Checksum
+ 2026-04-06T21:34:19.3585131Z 06e0fe352aa6: Download complete
+ 2026-04-06T21:34:19.4587734Z 864140dc3421: Download complete
+ 2026-04-06T21:34:19.7212501Z 9d5a52700976: Download complete
+ 2026-04-06T21:34:19.9940302Z 5f18375df192: Verifying Checksum
+ 2026-04-06T21:34:19.9945979Z 5f18375df192: Download complete
+ 2026-04-06T21:34:22.7667049Z 92255abe88d4: Verifying Checksum
+ 2026-04-06T21:34:22.7670479Z 92255abe88d4: Download complete
+ 2026-04-06T21:34:23.0318650Z 607c3964496f: Verifying Checksum
+ 2026-04-06T21:34:23.0322845Z 607c3964496f: Download complete
+ 2026-04-06T21:34:23.1997323Z d28605281af9: Pull complete
+ 2026-04-06T21:34:23.2800023Z 01d6e6239440: Verifying Checksum
+ 2026-04-06T21:34:23.2800612Z 01d6e6239440: Download complete
+ 2026-04-06T21:34:23.5453663Z ba295a7da8de: Verifying Checksum
+ 2026-04-06T21:34:23.5459605Z ba295a7da8de: Download complete
+ 2026-04-06T21:34:23.8126618Z a639fd3d0d2a: Verifying Checksum
+ 2026-04-06T21:34:23.8133931Z a639fd3d0d2a: Download complete
+ 2026-04-06T21:34:24.0704765Z 6f65125722be: Verifying Checksum
+ 2026-04-06T21:34:24.0706866Z 6f65125722be: Download complete
+ 2026-04-06T21:34:24.3369808Z 4f4fb700ef54: Download complete
+ 2026-04-06T21:34:24.6120243Z 9b7bdd3d28e7: Verifying Checksum
+ 2026-04-06T21:34:24.6121109Z 9b7bdd3d28e7: Download complete
+ 2026-04-06T21:34:24.7883757Z df4427944238: Verifying Checksum
+ 2026-04-06T21:34:24.7884673Z df4427944238: Download complete
+ 2026-04-06T21:34:25.0455158Z bb93f36029d2: Verifying Checksum
+ 2026-04-06T21:34:25.0456360Z bb93f36029d2: Download complete
+ 2026-04-06T21:34:25.0852878Z e38bbb9490cf: Verifying Checksum
+ 2026-04-06T21:34:25.0854679Z e38bbb9490cf: Download complete
+ 2026-04-06T21:34:25.3088112Z 6e18ca0b56ef: Download complete
+ 2026-04-06T21:34:25.3559646Z ae4d77164da5: Verifying Checksum
+ 2026-04-06T21:34:25.3561878Z ae4d77164da5: Download complete
+ 2026-04-06T21:34:25.6040045Z 1bc6db1c40a2: Verifying Checksum
+ 2026-04-06T21:34:25.6040551Z 1bc6db1c40a2: Download complete
+ 2026-04-06T21:34:25.7221675Z b5960f7e1e90: Verifying Checksum
+ 2026-04-06T21:34:25.7222211Z b5960f7e1e90: Download complete
+ 2026-04-06T21:34:25.8538866Z ab1965dce37e: Verifying Checksum
+ 2026-04-06T21:34:25.8541031Z ab1965dce37e: Download complete
+ 2026-04-06T21:34:25.9872802Z ed2e8604487e: Verifying Checksum
+ 2026-04-06T21:34:25.9873945Z ed2e8604487e: Download complete
+ 2026-04-06T21:34:26.2358603Z 7dfaeca53cbd: Verifying Checksum
+ 2026-04-06T21:34:26.2359849Z 7dfaeca53cbd: Download complete
+ 2026-04-06T21:34:27.8175923Z 06ff2ae39953: Verifying Checksum
+ 2026-04-06T21:34:27.8176475Z 06ff2ae39953: Download complete
+ 2026-04-06T21:34:28.0707096Z 70e4206506df: Verifying Checksum
+ 2026-04-06T21:34:28.0707535Z 70e4206506df: Download complete
+ 2026-04-06T21:34:28.3073795Z 7844ea78e96c: Verifying Checksum
+ 2026-04-06T21:34:28.3074338Z 7844ea78e96c: Download complete
+ 2026-04-06T21:34:28.5614806Z 6fd9ee51b72a: Verifying Checksum
+ 2026-04-06T21:34:28.5616160Z 6fd9ee51b72a: Download complete
+ 2026-04-06T21:34:28.6327913Z 1c308aef476e: Verifying Checksum
+ 2026-04-06T21:34:28.6328401Z 1c308aef476e: Download complete
+ 2026-04-06T21:34:29.5197843Z a8e9a3eceed6: Verifying Checksum
+ 2026-04-06T21:34:29.5198323Z a8e9a3eceed6: Download complete
+ 2026-04-06T21:34:34.9665177Z eae4f94d193f: Pull complete
+ 2026-04-06T21:34:35.0544950Z a9fe009b5706: Pull complete
+ 2026-04-06T21:34:35.6728422Z 4f5abe32a535: Verifying Checksum
+ 2026-04-06T21:34:35.6728926Z 4f5abe32a535: Download complete
+ 2026-04-06T21:34:41.6093081Z 25c90e8e5a4c: Pull complete
+ 2026-04-06T21:34:41.6184521Z dea941de41e2: Pull complete
+ 2026-04-06T21:34:41.6547153Z 78e15869d18d: Pull complete
+ 2026-04-06T21:34:55.9114153Z df4427944238: Pull complete
+ 2026-04-06T21:34:55.9271531Z 06e0fe352aa6: Pull complete
+ 2026-04-06T21:34:55.9385357Z 864140dc3421: Pull complete
+ 2026-04-06T21:35:21.3150019Z 1c308aef476e: Pull complete
+ 2026-04-06T21:35:21.3255220Z 9d5a52700976: Pull complete
+ 2026-04-06T21:35:21.3352620Z 5f18375df192: Pull complete
+ 2026-04-06T21:35:43.9199592Z 92255abe88d4: Pull complete
+ 2026-04-06T21:35:43.9298957Z 607c3964496f: Pull complete
+ 2026-04-06T21:35:43.9760245Z 01d6e6239440: Pull complete
+ 2026-04-06T21:35:43.9853869Z ba295a7da8de: Pull complete
+ 2026-04-06T21:35:44.0403552Z a639fd3d0d2a: Pull complete
+ 2026-04-06T21:35:44.0484134Z 6f65125722be: Pull complete
+ 2026-04-06T21:35:44.0553647Z 4f4fb700ef54: Pull complete
+ 2026-04-06T21:35:44.0658115Z 9b7bdd3d28e7: Pull complete
+ 2026-04-06T21:35:44.8069645Z e38bbb9490cf: Pull complete
+ 2026-04-06T21:35:44.8164077Z bb93f36029d2: Pull complete
+ 2026-04-06T21:35:44.8320671Z 6e18ca0b56ef: Pull complete
+ 2026-04-06T21:35:44.8397922Z ae4d77164da5: Pull complete
+ 2026-04-06T21:35:45.3065120Z b5960f7e1e90: Pull complete
+ 2026-04-06T21:35:45.3196070Z 1bc6db1c40a2: Pull complete
+ 2026-04-06T21:35:45.3305995Z ab1965dce37e: Pull complete
+ 2026-04-06T21:35:45.3388435Z ed2e8604487e: Pull complete
+ 2026-04-06T21:36:07.1569014Z 4f5abe32a535: Pull complete
+ 2026-04-06T21:36:07.1669041Z 7dfaeca53cbd: Pull complete
+ 2026-04-06T21:36:11.5137125Z 06ff2ae39953: Pull complete
+ 2026-04-06T21:36:11.5351462Z 70e4206506df: Pull complete
+ 2026-04-06T21:36:11.5442435Z 7844ea78e96c: Pull complete
+ 2026-04-06T21:36:11.5536283Z 6fd9ee51b72a: Pull complete
+ 2026-04-06T21:36:15.7458944Z a8e9a3eceed6: Pull complete
+ 2026-04-06T21:36:15.7513055Z Digest: sha256:f5da9d3fc6a86363e5a0fd4a6e9e4629f80a4961688df27c8b03da07444d3227
+ 2026-04-06T21:36:15.7529301Z Status: Downloaded newer image for aswf/ci-opencue:2024.1
+ 2026-04-06T21:36:15.7549257Z docker.io/aswf/ci-opencue:2024.1
+ 2026-04-06T21:36:15.7630267Z ##[command]/usr/bin/docker create --name 753b150d00434c469fbf91cf07bb81f0_aswfciopencue20241_40ad0f --label 875a01 --workdir /__w/OpenCue/OpenCue --network github_network_bde1d8ceb1c341ec9624c8af86bc9ffd  -e "HOME=/github/home" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/runner/work":"/__w" -v "/home/runner/actions-runner/cached/externals":"/__e":ro -v "/home/runner/work/_temp":"/__w/_temp" -v "/home/runner/work/_actions":"/__w/_actions" -v "/opt/hostedtoolcache":"/__t" -v "/home/runner/work/_temp/_github_home":"/github/home" -v "/home/runner/work/_temp/_github_workflow":"/github/workflow" --entrypoint "tail" aswf/ci-opencue:2024.1 "-f" "/dev/null"
+ 2026-04-06T21:36:15.7970991Z f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:36:15.7997045Z ##[command]/usr/bin/docker start f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:36:16.0016573Z f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:36:16.0037816Z ##[command]/usr/bin/docker ps --all --filter id=f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48 --filter status=running --no-trunc --format "{{.ID}} {{.Status}}"
+ 2026-04-06T21:36:16.0188569Z f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48 Up Less than a second
+ 2026-04-06T21:36:16.0211267Z ##[command]/usr/bin/docker inspect --format "{{range .Config.Env}}{{println .}}{{end}}" f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:36:16.0337291Z HOME=/github/home
+ 2026-04-06T21:36:16.0339932Z GITHUB_ACTIONS=true
+ 2026-04-06T21:36:16.0340550Z CI=true
+ 2026-04-06T21:36:16.0341495Z PATH=/opt/rh/rh-git218/root/usr/bin:/usr/local/bin:/opt/rh/gcc-toolset-11/root/usr/bin:/opt/app-root/src/bin:/opt/rh/gcc-toolset-11/root/usr/bin/:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin
+ 2026-04-06T21:36:16.0342244Z NVARCH=x86_64
+ 2026-04-06T21:36:16.0346259Z NVIDIA_REQUIRE_CUDA=cuda>=12.3 brand=tesla,driver>=470,driver<471 brand=unknown,driver>=470,driver<471 brand=nvidia,driver>=470,driver<471 brand=nvidiartx,driver>=470,driver<471 brand=geforce,driver>=470,driver<471 brand=geforcertx,driver>=470,driver<471 brand=quadro,driver>=470,driver<471 brand=quadrortx,driver>=470,driver<471 brand=titan,driver>=470,driver<471 brand=titanrtx,driver>=470,driver<471 brand=tesla,driver>=525,driver<526 brand=unknown,driver>=525,driver<526 brand=nvidia,driver>=525,driver<526 brand=nvidiartx,driver>=525,driver<526 brand=geforce,driver>=525,driver<526 brand=geforcertx,driver>=525,driver<526 brand=quadro,driver>=525,driver<526 brand=quadrortx,driver>=525,driver<526 brand=titan,driver>=525,driver<526 brand=titanrtx,driver>=525,driver<526 brand=tesla,driver>=535,driver<536 brand=unknown,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=geforce,driver>=535,driver<536 brand=geforcertx,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=titan,driver>=535,driver<536 brand=titanrtx,driver>=535,driver<536
+ 2026-04-06T21:36:16.0350872Z NV_CUDA_CUDART_VERSION=12.3.52-1
+ 2026-04-06T21:36:16.0351235Z CUDA_VERSION=12.3.0
+ 2026-04-06T21:36:16.0352407Z LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:/opt/rh/httpd24/root/usr/lib64:/opt/rh/gcc-toolset-11/root/usr/lib64:/opt/rh/gcc-toolset-11/root/usr/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+ 2026-04-06T21:36:16.0353172Z NVIDIA_VISIBLE_DEVICES=all
+ 2026-04-06T21:36:16.0353421Z NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+ 2026-04-06T21:36:16.0353714Z NV_CUDA_LIB_VERSION=12.3.0-1
+ 2026-04-06T21:36:16.0353935Z NV_NVTX_VERSION=12.3.52-1
+ 2026-04-06T21:36:16.0354127Z NV_LIBNPP_VERSION=12.2.2.32-1
+ 2026-04-06T21:36:16.0354354Z NV_LIBNPP_PACKAGE=libnpp-12-3-12.2.2.32-1
+ 2026-04-06T21:36:16.0354595Z NV_LIBCUBLAS_VERSION=12.3.2.9-1
+ 2026-04-06T21:36:16.0354808Z NV_LIBNCCL_PACKAGE_NAME=libnccl
+ 2026-04-06T21:36:16.0355025Z NV_LIBNCCL_PACKAGE_VERSION=2.19.3-1
+ 2026-04-06T21:36:16.0355251Z NV_LIBNCCL_VERSION=2.19.3
+ 2026-04-06T21:36:16.0355441Z NCCL_VERSION=2.19.3
+ 2026-04-06T21:36:16.0355892Z NV_LIBNCCL_PACKAGE=libnccl-2.19.3-1+cuda12.3
+ 2026-04-06T21:36:16.0356144Z NVIDIA_PRODUCT_NAME=CUDA
+ 2026-04-06T21:36:16.0356342Z NV_NVPROF_VERSION=12.3.52-1
+ 2026-04-06T21:36:16.0356570Z REDACTED.3.52-1
+ 2026-04-06T21:36:16.0356836Z NV_CUDA_CUDART_DEV_VERSION=12.3.52-1
+ 2026-04-06T21:36:16.0357075Z NV_NVML_DEV_VERSION=12.3.52-1
+ 2026-04-06T21:36:16.0357284Z NV_LIBCUBLAS_DEV_VERSION=12.3.2.9-1
+ 2026-04-06T21:36:16.0357528Z NV_LIBNPP_DEV_VERSION=12.2.2.32-1
+ 2026-04-06T21:36:16.0357779Z REDACTED.2.2.32-1
+ 2026-04-06T21:36:16.0358072Z NV_LIBNCCL_DEV_PACKAGE_NAME=libnccl-devel
+ 2026-04-06T21:36:16.0358327Z NV_LIBNCCL_DEV_PACKAGE_VERSION=2.19.3-1
+ 2026-04-06T21:36:16.0358603Z NV_LIBNCCL_DEV_PACKAGE=libnccl-devel-2.19.3-1+cuda12.3
+ 2026-04-06T21:36:16.0358897Z NV_CUDA_NSIGHT_COMPUTE_VERSION=12.3.0-1
+ 2026-04-06T21:36:16.0359421Z REDACTED.3.0-1
+ 2026-04-06T21:36:16.0359779Z LIBRARY_PATH=/usr/local/cuda/lib64/stubs
+ 2026-04-06T21:36:16.0360009Z ASWF_ORG=aswf
+ 2026-04-06T21:36:16.0360166Z ASWF_VERSION=2024.1
+ 2026-04-06T21:36:16.0360348Z ASWF_INSTALL_PREFIX=/usr/local
+ 2026-04-06T21:36:16.0360563Z ASWF_PYSIDE_CLANG_VERSION=16.0.6
+ 2026-04-06T21:36:16.0360775Z ASWF_DTS_PREFIX=gcc-toolset
+ 2026-04-06T21:36:16.0360975Z ASWF_CLANG_VERSION=16.0.6
+ 2026-04-06T21:36:16.0361165Z ASWF_NINJA_VERSION=1.11.1
+ 2026-04-06T21:36:16.0361355Z ASWF_CUDA_VERSION=12.3.0
+ 2026-04-06T21:36:16.0361546Z ASWF_GLVND_VERSION=1.7.0
+ 2026-04-06T21:36:16.0361730Z ASWF_CCACHE_VERSION=4.8.3
+ 2026-04-06T21:36:16.0361921Z ASWF_DTS_VERSION=11
+ 2026-04-06T21:36:16.0362093Z ASWF_SONAR_VERSION=5.0.1.3006
+ 2026-04-06T21:36:16.0362297Z ASWF_CONAN_VERSION=1.64.0
+ 2026-04-06T21:36:16.0362484Z ASWF_CMAKE_VERSION=3.27.9
+ 2026-04-06T21:36:16.0362674Z ASWF_CONAN_PYTHON_VERSION=3.11.8
+ 2026-04-06T21:36:16.0362889Z ASWF_BASEOS_DISTRO=rockylinux8
+ 2026-04-06T21:36:16.0363131Z PKG_CONFIG_PATH=/usr/local/lib/pkgconfig
+ 2026-04-06T21:36:16.0363440Z PERL5LIB=/opt/rh/rh-git218/root/usr/share/perl5/vendor_perl
+ 2026-04-06T21:36:16.0363766Z MANPATH=/opt/rh/rh-git218/root/usr/share/man
+ 2026-04-06T21:36:16.0364011Z ASWF_CONAN_ROOT=/opt/conan
+ 2026-04-06T21:36:16.0364214Z CONAN_USER_HOME=/opt/conan_home
+ 2026-04-06T21:36:16.0364430Z ASWF_VFXPLATFORM_VERSION=2024
+ 2026-04-06T21:36:16.0364643Z ASWF_PYTHON_VERSION=3.11.9
+ 2026-04-06T21:36:16.0364838Z ASWF_NUMPY_VERSION=1.24.3
+ 2026-04-06T21:36:16.0365032Z ASWF_PYTHON_MAJOR_MINOR_VERSION=3.11
+ 2026-04-06T21:36:16.0365726Z PYTHONPATH=/usr/local/lib/python3.11/site-packages:/usr/local/lib64/python3.11/site-packages:/usr/local/lib/python:
+ 2026-04-06T21:36:16.0374253Z ##[endgroup]
+ 2026-04-06T21:36:16.0383515Z ##[group]Waiting for all services to be ready
+ 2026-04-06T21:36:16.0385262Z ##[endgroup]
+ 2026-04-06T21:36:16.0660102Z ##[group]Run actions/checkout@v4
+ 2026-04-06T21:36:16.0660654Z with:
+ 2026-04-06T21:36:16.0660836Z   fetch-depth: 0
+ 2026-04-06T21:36:16.0661072Z   repository: AcademySoftwareFoundation/OpenCue
+ 2026-04-06T21:36:16.0661626Z   token: ***
+ 2026-04-06T21:36:16.0661808Z   ssh-strict: true
+ 2026-04-06T21:36:16.0661983Z   ssh-user: git
+ 2026-04-06T21:36:16.0662171Z   persist-credentials: true
+ 2026-04-06T21:36:16.0662379Z   clean: true
+ 2026-04-06T21:36:16.0662572Z   sparse-checkout-cone-mode: true
+ 2026-04-06T21:36:16.0662811Z   fetch-tags: false
+ 2026-04-06T21:36:16.0662989Z   show-progress: true
+ 2026-04-06T21:36:16.0663181Z   lfs: false
+ 2026-04-06T21:36:16.0663339Z   submodules: false
+ 2026-04-06T21:36:16.0663523Z   set-safe-directory: true
+ 2026-04-06T21:36:16.0663917Z env:
+ 2026-04-06T21:36:16.0664126Z   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+ 2026-04-06T21:36:16.0664391Z ##[endgroup]
+ 2026-04-06T21:36:16.0724807Z ##[command]/usr/bin/docker exec  f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48 sh -c "cat /etc/*release | grep ^ID"
+ 2026-04-06T21:36:16.3160545Z Syncing repository: AcademySoftwareFoundation/OpenCue
+ 2026-04-06T21:36:16.3162438Z ##[group]Getting Git version info
+ 2026-04-06T21:36:16.3162910Z Working directory is '/__w/OpenCue/OpenCue'
+ 2026-04-06T21:36:16.3163685Z [command]/usr/bin/git version
+ 2026-04-06T21:36:16.3164045Z git version 2.43.5
+ 2026-04-06T21:36:16.3164838Z ##[endgroup]
+ 2026-04-06T21:36:16.3168547Z Temporarily overriding HOME='/__w/_temp/4362f32e-36e9-4f5c-996f-106868b13b0f' before making global git config changes
+ 2026-04-06T21:36:16.3169243Z Adding repository directory to the temporary git global config as a safe directory
+ 2026-04-06T21:36:16.3169784Z [command]/usr/bin/git config --global --add safe.directory /__w/OpenCue/OpenCue
+ 2026-04-06T21:36:16.3216500Z Deleting the contents of '/__w/OpenCue/OpenCue'
+ 2026-04-06T21:36:16.3220570Z ##[group]Initializing the repository
+ 2026-04-06T21:36:16.3225313Z [command]/usr/bin/git init /__w/OpenCue/OpenCue
+ 2026-04-06T21:36:16.3278328Z hint: Using 'master' as the name for the initial branch. This default branch name
+ 2026-04-06T21:36:16.3279161Z hint: is subject to change. To configure the initial branch name to use in all
+ 2026-04-06T21:36:16.3279671Z hint: of your new repositories, which will suppress this warning, call:
+ 2026-04-06T21:36:16.3280022Z hint: 
+ 2026-04-06T21:36:16.3280275Z hint: 	git config --global init.defaultBranch <name>
+ 2026-04-06T21:36:16.3280563Z hint: 
+ 2026-04-06T21:36:16.3280821Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+ 2026-04-06T21:36:16.3281287Z hint: 'development'. The just-created branch can be renamed via this command:
+ 2026-04-06T21:36:16.3281656Z hint: 
+ 2026-04-06T21:36:16.3281820Z hint: 	git branch -m <name>
+ 2026-04-06T21:36:16.3329292Z Initialized empty Git repository in /__w/OpenCue/OpenCue/.git/
+ 2026-04-06T21:36:16.3343212Z [command]/usr/bin/git remote add origin https://github.com/AcademySoftwareFoundation/OpenCue
+ 2026-04-06T21:36:16.3394244Z ##[endgroup]
+ 2026-04-06T21:36:16.3394821Z ##[group]Disabling automatic garbage collection
+ 2026-04-06T21:36:16.3398290Z [command]/usr/bin/git config --local gc.auto 0
+ 2026-04-06T21:36:16.3446907Z ##[endgroup]
+ 2026-04-06T21:36:16.3447236Z ##[group]Setting up auth
+ 2026-04-06T21:36:16.3454532Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+ 2026-04-06T21:36:16.3507178Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+ 2026-04-06T21:36:16.4144321Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+ 2026-04-06T21:36:16.4201440Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+ 2026-04-06T21:36:16.4848250Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+ 2026-04-06T21:36:16.4900917Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+ 2026-04-06T21:36:16.5579498Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+ 2026-04-06T21:36:16.5661928Z ##[endgroup]
+ 2026-04-06T21:36:16.5662569Z ##[group]Fetching the repository
+ 2026-04-06T21:36:16.5673249Z [command]/usr/bin/git -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+ 2026-04-06T21:36:18.7926308Z From https://github.com/AcademySoftwareFoundation/OpenCue
+ 2026-04-06T21:36:18.7927357Z  * [new branch]        DiegoTavares-patch-1    -> origin/DiegoTavares-patch-1
+ 2026-04-06T21:36:18.7928378Z  * [new branch]        README_upgrade          -> origin/README_upgrade
+ 2026-04-06T21:36:18.7929398Z  * [new branch]        Update-Steering-Committee -> origin/Update-Steering-Committee
+ 2026-04-06T21:36:18.7933888Z  * [new branch]        active_code_owners      -> origin/active_code_owners
+ 2026-04-06T21:36:18.7934914Z  * [new branch]        add-header              -> origin/add-header
+ 2026-04-06T21:36:18.7937667Z  * [new branch]        add_hardware_tag        -> origin/add_hardware_tag
+ 2026-04-06T21:36:18.7938797Z  * [new branch]        add_jimmy               -> origin/add_jimmy
+ 2026-04-06T21:36:18.7941635Z  * [new branch]        ci-upload-to-pypi       -> origin/ci-upload-to-pypi
+ 2026-04-06T21:36:18.7943824Z  * [new branch]        cicd-fix-packaging-v2   -> origin/cicd-fix-packaging-v2
+ 2026-04-06T21:36:18.7945950Z  * [new branch]        cloud-plugin            -> origin/cloud-plugin
+ 2026-04-06T21:36:18.7946723Z  * [new branch]        containerized_rqd       -> origin/containerized_rqd
+ 2026-04-06T21:36:18.7949727Z  * [new branch]        contributing_issues     -> origin/contributing_issues
+ 2026-04-06T21:36:18.7950882Z  * [new branch]        cueweb                  -> origin/cueweb
+ 2026-04-06T21:36:18.7952056Z  * [new branch]        cueweb-healthcheck-docs -> origin/cueweb-healthcheck-docs
+ 2026-04-06T21:36:18.7956877Z  * [new branch]        dependabot/bundler/docs/faraday-2.14.1 -> origin/dependabot/bundler/docs/faraday-2.14.1
+ 2026-04-06T21:36:18.7959606Z  * [new branch]        dependabot/bundler/docs/rexml-3.4.2 -> origin/dependabot/bundler/docs/rexml-3.4.2
+ 2026-04-06T21:36:18.7963584Z  * [new branch]        dependabot/bundler/docs/uri-1.0.4 -> origin/dependabot/bundler/docs/uri-1.0.4
+ 2026-04-06T21:36:18.7966200Z  * [new branch]        dependabot/cargo/rust/crossbeam-channel-0.5.15 -> origin/dependabot/cargo/rust/crossbeam-channel-0.5.15
+ 2026-04-06T21:36:18.7967609Z  * [new branch]        dependabot/cargo/rust/rsa-0.9.10 -> origin/dependabot/cargo/rust/rsa-0.9.10
+ 2026-04-06T21:36:18.7969246Z  * [new branch]        dependabot/cargo/rust/slab-0.4.11 -> origin/dependabot/cargo/rust/slab-0.4.11
+ 2026-04-06T21:36:18.7972350Z  * [new branch]        dependabot/cargo/rust/tokio-1.45.1 -> origin/dependabot/cargo/rust/tokio-1.45.1
+ 2026-04-06T21:36:18.7976194Z  * [new branch]        dependabot/cargo/rust/tracing-subscriber-0.3.20 -> origin/dependabot/cargo/rust/tracing-subscriber-0.3.20
+ 2026-04-06T21:36:18.7981615Z  * [new branch]        dependabot/github_actions/dot-github/workflows/tj-actions/changed-files-41 -> origin/dependabot/github_actions/dot-github/workflows/tj-actions/changed-files-41
+ 2026-04-06T21:36:18.7985024Z  * [new branch]        dependabot/npm_and_yarn/cueweb/ajv-6.14.0 -> origin/dependabot/npm_and_yarn/cueweb/ajv-6.14.0
+ 2026-04-06T21:36:18.7988135Z  * [new branch]        dependabot/npm_and_yarn/cueweb/babel/helpers-7.26.10 -> origin/dependabot/npm_and_yarn/cueweb/babel/helpers-7.26.10
+ 2026-04-06T21:36:18.7990435Z  * [new branch]        dependabot/npm_and_yarn/cueweb/babel/runtime-7.27.1 -> origin/dependabot/npm_and_yarn/cueweb/babel/runtime-7.27.1
+ 2026-04-06T21:36:18.7993567Z  * [new branch]        dependabot/npm_and_yarn/cueweb/cross-spawn-7.0.6 -> origin/dependabot/npm_and_yarn/cueweb/cross-spawn-7.0.6
+ 2026-04-06T21:36:18.7999595Z  * [new branch]        dependabot/npm_and_yarn/cueweb/flatted-3.4.2 -> origin/dependabot/npm_and_yarn/cueweb/flatted-3.4.2
+ 2026-04-06T21:36:18.8001435Z  * [new branch]        dependabot/npm_and_yarn/cueweb/form-data-4.0.4 -> origin/dependabot/npm_and_yarn/cueweb/form-data-4.0.4
+ 2026-04-06T21:36:18.8002833Z  * [new branch]        dependabot/npm_and_yarn/cueweb/glob-10.5.0 -> origin/dependabot/npm_and_yarn/cueweb/glob-10.5.0
+ 2026-04-06T21:36:18.8005159Z  * [new branch]        dependabot/npm_and_yarn/cueweb/jws-3.2.3 -> origin/dependabot/npm_and_yarn/cueweb/jws-3.2.3
+ 2026-04-06T21:36:18.8006727Z  * [new branch]        dependabot/npm_and_yarn/cueweb/lodash-4.17.23 -> origin/dependabot/npm_and_yarn/cueweb/lodash-4.17.23
+ 2026-04-06T21:36:18.8010552Z  * [new branch]        dependabot/npm_and_yarn/cueweb/lodash-4.18.1 -> origin/dependabot/npm_and_yarn/cueweb/lodash-4.18.1
+ 2026-04-06T21:36:18.8012281Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-0d13b2d87f -> origin/dependabot/npm_and_yarn/cueweb/multi-0d13b2d87f
+ 2026-04-06T21:36:18.8014695Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-57404e07ab -> origin/dependabot/npm_and_yarn/cueweb/multi-57404e07ab
+ 2026-04-06T21:36:18.8016821Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-654a729486 -> origin/dependabot/npm_and_yarn/cueweb/multi-654a729486
+ 2026-04-06T21:36:18.8021239Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-73131da39e -> origin/dependabot/npm_and_yarn/cueweb/multi-73131da39e
+ 2026-04-06T21:36:18.8024588Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-75e6bc5210 -> origin/dependabot/npm_and_yarn/cueweb/multi-75e6bc5210
+ 2026-04-06T21:36:18.8026999Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-77c12b7509 -> origin/dependabot/npm_and_yarn/cueweb/multi-77c12b7509
+ 2026-04-06T21:36:18.8028661Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-87b53143a8 -> origin/dependabot/npm_and_yarn/cueweb/multi-87b53143a8
+ 2026-04-06T21:36:18.8030243Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-8f3f190bed -> origin/dependabot/npm_and_yarn/cueweb/multi-8f3f190bed
+ 2026-04-06T21:36:18.8032361Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-b52ef771cb -> origin/dependabot/npm_and_yarn/cueweb/multi-b52ef771cb
+ 2026-04-06T21:36:18.8035928Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-beada861d8 -> origin/dependabot/npm_and_yarn/cueweb/multi-beada861d8
+ 2026-04-06T21:36:18.8037920Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-bf05dc1ecf -> origin/dependabot/npm_and_yarn/cueweb/multi-bf05dc1ecf
+ 2026-04-06T21:36:18.8039614Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-c136cad177 -> origin/dependabot/npm_and_yarn/cueweb/multi-c136cad177
+ 2026-04-06T21:36:18.8043306Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-c22e25d29b -> origin/dependabot/npm_and_yarn/cueweb/multi-c22e25d29b
+ 2026-04-06T21:36:18.8045427Z  * [new branch]        dependabot/npm_and_yarn/cueweb/multi-efb0786ca7 -> origin/dependabot/npm_and_yarn/cueweb/multi-efb0786ca7
+ 2026-04-06T21:36:18.8048689Z  * [new branch]        dependabot/npm_and_yarn/cueweb/nanoid-3.3.8 -> origin/dependabot/npm_and_yarn/cueweb/nanoid-3.3.8
+ 2026-04-06T21:36:18.8050467Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.20 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.20
+ 2026-04-06T21:36:18.8052941Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.22 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.22
+ 2026-04-06T21:36:18.8055707Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.26 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.26
+ 2026-04-06T21:36:18.8057795Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.30 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.30
+ 2026-04-06T21:36:18.8061646Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.32 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.32
+ 2026-04-06T21:36:18.8063969Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-14.2.35 -> origin/dependabot/npm_and_yarn/cueweb/next-14.2.35
+ 2026-04-06T21:36:18.8067663Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-16.1.6 -> origin/dependabot/npm_and_yarn/cueweb/next-16.1.6
+ 2026-04-06T21:36:18.8072605Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-16.2.1 -> origin/dependabot/npm_and_yarn/cueweb/next-16.2.1
+ 2026-04-06T21:36:18.8074774Z  * [new branch]        dependabot/npm_and_yarn/cueweb/next-auth-4.24.12 -> origin/dependabot/npm_and_yarn/cueweb/next-auth-4.24.12
+ 2026-04-06T21:36:18.8078951Z  * [new branch]        dependabot/npm_and_yarn/cueweb/sentry/nextjs-8.49.0 -> origin/dependabot/npm_and_yarn/cueweb/sentry/nextjs-8.49.0
+ 2026-04-06T21:36:18.8082879Z  * [new branch]        dependabot/npm_and_yarn/cueweb/webpack-5.105.0 -> origin/dependabot/npm_and_yarn/cueweb/webpack-5.105.0
+ 2026-04-06T21:36:18.8086352Z  * [new branch]        dependabot/npm_and_yarn/cueweb/webpack-5.105.2 -> origin/dependabot/npm_and_yarn/cueweb/webpack-5.105.2
+ 2026-04-06T21:36:18.8089079Z  * [new branch]        dependabot/pip/future-0.18.3 -> origin/dependabot/pip/future-0.18.3
+ 2026-04-06T21:36:18.8090083Z  * [new branch]        dependabot/pip/grpcio-1.53.0 -> origin/dependabot/pip/grpcio-1.53.0
+ 2026-04-06T21:36:18.8091061Z  * [new branch]        dependabot/pip/grpcio-1.53.2 -> origin/dependabot/pip/grpcio-1.53.2
+ 2026-04-06T21:36:18.8097491Z  * [new branch]        dependabot/pip/pycue/pyyaml-5.4.1 -> origin/dependabot/pip/pycue/pyyaml-5.4.1
+ 2026-04-06T21:36:18.8101413Z  * [new branch]        dependabot/pip/pyyaml-5.4 -> origin/dependabot/pip/pyyaml-5.4
+ 2026-04-06T21:36:18.8102378Z  * [new branch]        dependabot/pip/rqd/pywin32-301 -> origin/dependabot/pip/rqd/pywin32-301
+ 2026-04-06T21:36:18.8105735Z  * [new branch]        docs/remove-obsolete-docker-compose-version -> origin/docs/remove-obsolete-docker-compose-version
+ 2026-04-06T21:36:18.8107495Z  * [new branch]        docs/revert-uri-lockfile -> origin/docs/revert-uri-lockfile
+ 2026-04-06T21:36:18.8109010Z  * [new branch]        fix-packaging-testing   -> origin/fix-packaging-testing
+ 2026-04-06T21:36:18.8111016Z  * [new branch]        fix/rqd-macos-temp-dir-stats -> origin/fix/rqd-macos-temp-dir-stats
+ 2026-04-06T21:36:18.8112495Z  * [new branch]        fix/sandbox-docker-build-compatibility -> origin/fix/sandbox-docker-build-compatibility
+ 2026-04-06T21:36:18.8114135Z  * [new branch]        fix_cueadmin2           -> origin/fix_cueadmin2
+ 2026-04-06T21:36:18.8121572Z  * [new branch]        fix_cueadmin_import     -> origin/fix_cueadmin_import
+ 2026-04-06T21:36:18.8123888Z  * [new branch]        github_pages            -> origin/github_pages
+ 2026-04-06T21:36:18.8126306Z  * [new branch]        hitaki_conn_issues      -> origin/hitaki_conn_issues
+ 2026-04-06T21:36:18.8127815Z  * [new branch]        jmertic-patch-1         -> origin/jmertic-patch-1
+ 2026-04-06T21:36:18.8128723Z  * [new branch]        jmertic-patch-2         -> origin/jmertic-patch-2
+ 2026-04-06T21:36:18.8129465Z  * [new branch]        master                  -> origin/master
+ 2026-04-06T21:36:18.8130127Z  * [new branch]        new-scheduler           -> origin/new-scheduler
+ 2026-04-06T21:36:18.8132068Z  * [new branch]        opencue_io_design       -> origin/opencue_io_design
+ 2026-04-06T21:36:18.8136597Z  * [new branch]        patch_ui_branch         -> origin/patch_ui_branch
+ 2026-04-06T21:36:18.8138045Z  * [new branch]        pull_request_template_llm -> origin/pull_request_template_llm
+ 2026-04-06T21:36:18.8139028Z  * [new branch]        release-packaging       -> origin/release-packaging
+ 2026-04-06T21:36:18.8142016Z  * [new branch]        remove_pyside6_test     -> origin/remove_pyside6_test
+ 2026-04-06T21:36:18.8144513Z  * [new branch]        remove_whls             -> origin/remove_whls
+ 2026-04-06T21:36:18.8149639Z  * [new branch]        rest_gateway            -> origin/rest_gateway
+ 2026-04-06T21:36:18.8150647Z  * [new branch]        root-less-rqd           -> origin/root-less-rqd
+ 2026-04-06T21:36:18.8151509Z  * [new branch]        rqd_windows             -> origin/rqd_windows
+ 2026-04-06T21:36:18.8153173Z  * [new branch]        rust_rqd_tmp            -> origin/rust_rqd_tmp
+ 2026-04-06T21:36:18.8156140Z  * [new branch]        scheduler-readme        -> origin/scheduler-readme
+ 2026-04-06T21:36:18.8157003Z  * [new branch]        test-pipeline-release   -> origin/test-pipeline-release
+ 2026-04-06T21:36:18.8160285Z  * [new tag]           0.2.119                 -> 0.2.119
+ 2026-04-06T21:36:18.8161446Z  * [new tag]           0.2.145                 -> 0.2.145
+ 2026-04-06T21:36:18.8162058Z  * [new tag]           0.2.65                  -> 0.2.65
+ 2026-04-06T21:36:18.8165024Z  * [new tag]           0.3.33                  -> 0.3.33
+ 2026-04-06T21:36:18.8167266Z  * [new tag]           0.3.43                  -> 0.3.43
+ 2026-04-06T21:36:18.8168683Z  * [new tag]           0.3.6                   -> 0.3.6
+ 2026-04-06T21:36:18.8171151Z  * [new tag]           0.4.0                   -> 0.4.0
+ 2026-04-06T21:36:18.8171774Z  * [new tag]           0.4.14                  -> 0.4.14
+ 2026-04-06T21:36:18.8174925Z  * [new tag]           1.11                    -> 1.11
+ 2026-04-06T21:36:18.8175430Z  * [new tag]           rm                      -> rm
+ 2026-04-06T21:36:18.8176272Z  * [new tag]           v0.1.107                -> v0.1.107
+ 2026-04-06T21:36:18.8178605Z  * [new tag]           v0.1.108                -> v0.1.108
+ 2026-04-06T21:36:18.8180567Z  * [new tag]           v0.1.59                 -> v0.1.59
+ 2026-04-06T21:36:18.8182581Z  * [new tag]           v0.1.66                 -> v0.1.66
+ 2026-04-06T21:36:18.8183331Z  * [new tag]           v0.1.74                 -> v0.1.74
+ 2026-04-06T21:36:18.8186050Z  * [new tag]           v0.1.91                 -> v0.1.91
+ 2026-04-06T21:36:18.8186773Z  * [new tag]           v0.1.96                 -> v0.1.96
+ 2026-04-06T21:36:18.8189023Z  * [new tag]           v0.14.1                 -> v0.14.1
+ 2026-04-06T21:36:18.8190155Z  * [new tag]           v0.14.5                 -> v0.14.5
+ 2026-04-06T21:36:18.8191685Z  * [new tag]           v0.15.22                -> v0.15.22
+ 2026-04-06T21:36:18.8197745Z  * [new tag]           v0.2.0                  -> v0.2.0
+ 2026-04-06T21:36:18.8198449Z  * [new tag]           v0.2.31                 -> v0.2.31
+ 2026-04-06T21:36:18.8199138Z  * [new tag]           v0.21.13                -> v0.21.13
+ 2026-04-06T21:36:18.8199891Z  * [new tag]           v0.22.14                -> v0.22.14
+ 2026-04-06T21:36:18.8201572Z  * [new tag]           v0.4.55                 -> v0.4.55
+ 2026-04-06T21:36:18.8202113Z  * [new tag]           v0.4.95                 -> v0.4.95
+ 2026-04-06T21:36:18.8202825Z  * [new tag]           v0.8.8                  -> v0.8.8
+ 2026-04-06T21:36:18.8203891Z  * [new tag]           v1.0.0                  -> v1.0.0
+ 2026-04-06T21:36:18.8211700Z  * [new tag]           v1.0.1                  -> v1.0.1
+ 2026-04-06T21:36:18.8212401Z  * [new tag]           v1.11.3                 -> v1.11.3
+ 2026-04-06T21:36:18.8212999Z  * [new tag]           v1.11.58                -> v1.11.58
+ 2026-04-06T21:36:18.8213667Z  * [new tag]           v1.11.59                -> v1.11.59
+ 2026-04-06T21:36:18.8214306Z  * [new tag]           v1.11.60                -> v1.11.60
+ 2026-04-06T21:36:18.8214830Z  * [new tag]           v1.11.66                -> v1.11.66
+ 2026-04-06T21:36:18.8217768Z  * [new tag]           v1.13.8                 -> v1.13.8
+ 2026-04-06T21:36:18.8218567Z  * [new tag]           v1.4.10                 -> v1.4.10
+ 2026-04-06T21:36:18.8219447Z  * [new tag]           v1.4.11                 -> v1.4.11
+ 2026-04-06T21:36:18.8220263Z  * [new tag]           v1.5.0.pre.1            -> v1.5.0.pre.1
+ 2026-04-06T21:36:18.8221156Z  * [new tag]           v1.5.0.pre2             -> v1.5.0.pre2
+ 2026-04-06T21:36:18.8301077Z [command]/usr/bin/git branch --list --remote origin/master
+ 2026-04-06T21:36:18.8354992Z   origin/master
+ 2026-04-06T21:36:18.8367315Z [command]/usr/bin/git rev-parse refs/remotes/origin/master
+ 2026-04-06T21:36:18.8406281Z f5fe0b1694be939f4a9e2c2242fda8f284a41f7e
+ 2026-04-06T21:36:18.8412369Z ##[endgroup]
+ 2026-04-06T21:36:18.8413426Z ##[group]Determining the checkout info
+ 2026-04-06T21:36:18.8414225Z ##[endgroup]
+ 2026-04-06T21:36:18.8420011Z [command]/usr/bin/git sparse-checkout disable
+ 2026-04-06T21:36:18.8476513Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+ 2026-04-06T21:36:18.8521545Z ##[group]Checking out the ref
+ 2026-04-06T21:36:18.8526574Z [command]/usr/bin/git checkout --progress --force -B master refs/remotes/origin/master
+ 2026-04-06T21:36:19.1341093Z Reset branch 'master'
+ 2026-04-06T21:36:19.1341542Z branch 'master' set up to track 'origin/master'.
+ 2026-04-06T21:36:19.1370661Z ##[endgroup]
+ 2026-04-06T21:36:19.1444407Z [command]/usr/bin/git log -1 --format=%H
+ 2026-04-06T21:36:19.1484776Z f5fe0b1694be939f4a9e2c2242fda8f284a41f7e
+ 2026-04-06T21:36:19.1697670Z ##[group]Run sudo yum -y install java-17-openjdk.x86_64
+ 2026-04-06T21:36:19.1698155Z [36;1msudo yum -y install java-17-openjdk.x86_64[0m
+ 2026-04-06T21:36:19.1698519Z [36;1msudo yum -y install java-17-openjdk-devel.x86_64[0m
+ 2026-04-06T21:36:19.1698880Z [36;1msudo alternatives --set java java-17-openjdk.x86_64[0m
+ 2026-04-06T21:36:19.1699245Z [36;1msudo alternatives --set javac java-17-openjdk.x86_64[0m
+ 2026-04-06T21:36:19.1699630Z [36;1msudo alternatives --set jre_openjdk java-17-openjdk.x86_64[0m
+ 2026-04-06T21:36:19.1699965Z [36;1mchown -R aswfuser:aswfgroup .[0m
+ 2026-04-06T21:36:19.1700296Z [36;1msu -c "cd cuebot && ./gradlew jacocoTestReport sonar" aswfuser[0m
+ 2026-04-06T21:36:19.1703333Z shell: sh -e {0}
+ 2026-04-06T21:36:19.1703524Z env:
+ 2026-04-06T21:36:19.1703720Z   ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+ 2026-04-06T21:36:19.1704230Z   GITHUB_TOKEN: ***
+ 2026-04-06T21:36:19.1704477Z   SONAR_TOKEN: ***
+ 2026-04-06T21:36:19.1704654Z ##[endgroup]
+ 2026-04-06T21:36:20.1589046Z Rocky Linux 8 - AppStream                        12 kB/s | 4.8 kB     00:00    
+ 2026-04-06T21:36:20.5194547Z Rocky Linux 8 - AppStream                        73 MB/s |  26 MB     00:00    
+ 2026-04-06T21:36:24.7921074Z Rocky Linux 8 - BaseOS                           18 kB/s | 4.3 kB     00:00    
+ 2026-04-06T21:36:26.5248598Z Rocky Linux 8 - BaseOS                           30 MB/s |  52 MB     00:01    
+ 2026-04-06T21:36:33.4179016Z Rocky Linux 8 - Devel WARNING! FOR BUILDROOT AN 9.3 kB/s | 3.6 kB     00:00    
+ 2026-04-06T21:36:35.0364100Z Rocky Linux 8 - Devel WARNING! FOR BUILDROOT AN  75 MB/s | 122 MB     00:01    
+ 2026-04-06T21:36:51.6454719Z Rocky Linux 8 - Extras                           28 kB/s | 3.1 kB     00:00    
+ 2026-04-06T21:36:52.3505332Z Rocky Linux 8 - Extras                           22 kB/s |  15 kB     00:00    
+ 2026-04-06T21:36:52.5761172Z Rocky Linux 8 - PowerTools                       43 kB/s | 4.8 kB     00:00    
+ 2026-04-06T21:36:53.4619008Z Rocky Linux 8 - PowerTools                      5.8 MB/s | 5.2 MB     00:00    
+ 2026-04-06T21:36:54.6823889Z cuda                                             13 kB/s | 3.5 kB     00:00    
+ 2026-04-06T21:36:54.7695306Z cuda                                             77 MB/s | 6.6 MB     00:00    
+ 2026-04-06T21:36:56.4186954Z Extra Packages for Enterprise Linux 8 - x86_64   68 kB/s |  29 kB     00:00    
+ 2026-04-06T21:36:58.6725049Z Extra Packages for Enterprise Linux 8 - x86_64  6.4 MB/s |  14 MB     00:02    
+ 2026-04-06T21:37:06.4678397Z Dependencies resolved.
+ 2026-04-06T21:37:06.4688362Z ================================================================================
+ 2026-04-06T21:37:06.4688957Z  Package                    Arch     Version                  Repository   Size
+ 2026-04-06T21:37:06.4689402Z ================================================================================
+ 2026-04-06T21:37:06.4689732Z Installing:
+ 2026-04-06T21:37:06.4690062Z  java-17-openjdk            x86_64   1:17.0.18.0.8-1.el8      appstream   500 k
+ 2026-04-06T21:37:06.4690494Z Upgrading:
+ 2026-04-06T21:37:06.4690784Z  tzdata-java                noarch   2026a-1.el8_10           appstream   186 k
+ 2026-04-06T21:37:06.4691581Z Installing dependencies:
+ 2026-04-06T21:37:06.4691962Z  java-17-openjdk-headless   x86_64   1:17.0.18.0.8-1.el8      appstream    46 M
+ 2026-04-06T21:37:06.4692315Z 
+ 2026-04-06T21:37:06.4692465Z Transaction Summary
+ 2026-04-06T21:37:06.4692862Z ================================================================================
+ 2026-04-06T21:37:06.4693390Z Install  2 Packages
+ 2026-04-06T21:37:06.4693718Z Upgrade  1 Package
+ 2026-04-06T21:37:06.4693911Z 
+ 2026-04-06T21:37:06.4694171Z Total download size: 47 M
+ 2026-04-06T21:37:06.4696417Z Downloading Packages:
+ 2026-04-06T21:37:06.7244592Z (1/3): tzdata-java-2026a-1.el8_10.noarch.rpm    2.1 MB/s | 186 kB     00:00    
+ 2026-04-06T21:37:06.7274789Z (2/3): java-17-openjdk-17.0.18.0.8-1.el8.x86_64 5.4 MB/s | 500 kB     00:00    
+ 2026-04-06T21:37:07.0164871Z (3/3): java-17-openjdk-headless-17.0.18.0.8-1.e 122 MB/s |  46 MB     00:00    
+ 2026-04-06T21:37:07.0196972Z --------------------------------------------------------------------------------
+ 2026-04-06T21:37:07.0202167Z Total                                            85 MB/s |  47 MB     00:00     
+ 2026-04-06T21:37:07.1754771Z Running transaction check
+ 2026-04-06T21:37:07.1894890Z Transaction check succeeded.
+ 2026-04-06T21:37:07.1896636Z Running transaction test
+ 2026-04-06T21:37:07.3766107Z Transaction test succeeded.
+ 2026-04-06T21:37:07.3824939Z Running transaction
+ 2026-04-06T21:37:07.5788525Z   Running scriptlet: java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64    1/1 
+ 2026-04-06T21:37:07.7010225Z   Preparing        :                                                        1/1 
+ 2026-04-06T21:37:11.2772649Z   Upgrading        : tzdata-java-2026a-1.el8_10.noarch                      1/4 
+ 2026-04-06T21:37:11.2884049Z   Installing       : java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64    2/4 
+ 2026-04-06T21:37:11.3466602Z   Running scriptlet: java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64    2/4 
+ 2026-04-06T21:37:11.3521498Z   Installing       : java-17-openjdk-1:17.0.18.0.8-1.el8.x86_64             3/4 
+ 2026-04-06T21:37:11.3655818Z   Running scriptlet: java-17-openjdk-1:17.0.18.0.8-1.el8.x86_64             3/4 
+ 2026-04-06T21:37:11.3706137Z   Cleanup          : tzdata-java-2024a-1.el8.noarch                         4/4 
+ 2026-04-06T21:37:11.3885701Z   Running scriptlet: java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64    4/4 
+ 2026-04-06T21:37:11.4203982Z   Running scriptlet: java-17-openjdk-1:17.0.18.0.8-1.el8.x86_64             4/4 
+ 2026-04-06T21:37:11.6549453Z   Running scriptlet: tzdata-java-2024a-1.el8.noarch                         4/4 
+ 2026-04-06T21:37:11.6552308Z   Verifying        : java-17-openjdk-1:17.0.18.0.8-1.el8.x86_64             1/4 
+ 2026-04-06T21:37:11.6553205Z   Verifying        : java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64    2/4 
+ 2026-04-06T21:37:11.6553841Z   Verifying        : tzdata-java-2026a-1.el8_10.noarch                      3/4 
+ 2026-04-06T21:37:11.8781890Z   Verifying        : tzdata-java-2024a-1.el8.noarch                         4/4 
+ 2026-04-06T21:37:11.8782408Z 
+ 2026-04-06T21:37:11.8782508Z Upgraded:
+ 2026-04-06T21:37:11.8782924Z   tzdata-java-2026a-1.el8_10.noarch                                             
+ 2026-04-06T21:37:11.8783439Z Installed:
+ 2026-04-06T21:37:11.8783831Z   java-17-openjdk-1:17.0.18.0.8-1.el8.x86_64                                    
+ 2026-04-06T21:37:11.8784511Z   java-17-openjdk-headless-1:17.0.18.0.8-1.el8.x86_64                           
+ 2026-04-06T21:37:11.8784934Z 
+ 2026-04-06T21:37:11.8785026Z Complete!
+ 2026-04-06T21:37:12.6166513Z Last metadata expiration check: 0:00:14 ago on Mon Apr  6 21:36:58 2026.
+ 2026-04-06T21:37:13.8183954Z Dependencies resolved.
+ 2026-04-06T21:37:13.8191092Z ================================================================================
+ 2026-04-06T21:37:13.8191931Z  Package                  Arch      Version                  Repository    Size
+ 2026-04-06T21:37:13.8192561Z ================================================================================
+ 2026-04-06T21:37:13.8193599Z Installing:
+ 2026-04-06T21:37:13.8194128Z  java-17-openjdk-devel    x86_64    1:17.0.18.0.8-1.el8      appstream    5.1 M
+ 2026-04-06T21:37:13.8194690Z 
+ 2026-04-06T21:37:13.8194835Z Transaction Summary
+ 2026-04-06T21:37:13.8195206Z ================================================================================
+ 2026-04-06T21:37:13.8195912Z Install  1 Package
+ 2026-04-06T21:37:13.8196108Z 
+ 2026-04-06T21:37:13.8196266Z Total download size: 5.1 M
+ 2026-04-06T21:37:13.8196653Z Installed size: 8.8 M
+ 2026-04-06T21:37:13.8198035Z Downloading Packages:
+ 2026-04-06T21:37:14.6689988Z java-17-openjdk-devel-17.0.18.0.8-1.el8.x86_64. 6.6 MB/s | 5.1 MB     00:00    
+ 2026-04-06T21:37:14.6691731Z --------------------------------------------------------------------------------
+ 2026-04-06T21:37:14.6694653Z Total                                           6.0 MB/s | 5.1 MB     00:00     
+ 2026-04-06T21:37:14.6976669Z Running transaction check
+ 2026-04-06T21:37:14.7045079Z Transaction check succeeded.
+ 2026-04-06T21:37:14.7047148Z Running transaction test
+ 2026-04-06T21:37:14.7862718Z Transaction test succeeded.
+ 2026-04-06T21:37:14.7900460Z Running transaction
+ 2026-04-06T21:37:15.2391596Z   Preparing        :                                                        1/1 
+ 2026-04-06T21:37:15.2441359Z   Installing       : java-17-openjdk-devel-1:17.0.18.0.8-1.el8.x86_64       1/1 
+ 2026-04-06T21:37:15.4304309Z   Running scriptlet: java-17-openjdk-devel-1:17.0.18.0.8-1.el8.x86_64       1/1 
+ 2026-04-06T21:37:15.6560456Z   Verifying        : java-17-openjdk-devel-1:17.0.18.0.8-1.el8.x86_64       1/1 
+ 2026-04-06T21:37:15.6561069Z 
+ 2026-04-06T21:37:15.6561216Z Installed:
+ 2026-04-06T21:37:15.6561728Z   java-17-openjdk-devel-1:17.0.18.0.8-1.el8.x86_64                              
+ 2026-04-06T21:37:15.6562127Z 
+ 2026-04-06T21:37:15.6562317Z Complete!
+ 2026-04-06T21:37:15.9936941Z Downloading https://services.gradle.org/distributions/gradle-7.6.2-bin.zip
+ 2026-04-06T21:37:17.6010487Z ...........10%............20%...........30%............40%............50%...........60%............70%............80%...........90%............100%
+ 2026-04-06T21:37:18.6044706Z 
+ 2026-04-06T21:37:18.6055727Z Welcome to Gradle 7.6.2!
+ 2026-04-06T21:37:18.6056040Z 
+ 2026-04-06T21:37:18.6056310Z Here are the highlights of this release:
+ 2026-04-06T21:37:18.6056775Z  - Added support for Java 19.
+ 2026-04-06T21:37:18.6057257Z  - Introduced `--rerun` flag for individual task rerun.
+ 2026-04-06T21:37:18.6057904Z  - Improved dependency block for test suites to be strongly typed.
+ 2026-04-06T21:37:18.6058602Z  - Added a pluggable system for Java toolchains provisioning.
+ 2026-04-06T21:37:18.6059015Z 
+ 2026-04-06T21:37:18.6060529Z For more details see https://docs.gradle.org/7.6.2/release-notes.html
+ 2026-04-06T21:37:18.6061564Z 
+ 2026-04-06T21:37:18.7040794Z Starting a Gradle Daemon (subsequent builds will be faster)
+ 2026-04-06T21:37:55.6067203Z > Task :extractIncludeProto
+ 2026-04-06T21:37:55.6068359Z > Task :extractProto
+ 2026-04-06T21:37:56.6038600Z > Task :generateProto
+ 2026-04-06T21:38:26.6038380Z > Task :compileJava
+ 2026-04-06T21:38:38.0042415Z > Task :processResources
+ 2026-04-06T21:38:38.0049468Z > Task :classes
+ 2026-04-06T21:38:40.0039672Z > Task :extractIncludeTestProto
+ 2026-04-06T21:38:40.0043250Z > Task :extractTestProto
+ 2026-04-06T21:38:40.0046869Z > Task :generateTestProto NO-SOURCE
+ 2026-04-06T21:38:43.5038157Z > Task :compileTestJava
+ 2026-04-06T21:38:43.5038593Z > Task :processTestResources
+ 2026-04-06T21:38:43.5038947Z > Task :testClasses
+ 2026-04-06T21:39:13.5038359Z > Task :test
+ 2026-04-06T21:39:51.4047446Z 21:39:51.325 [SpringContextShutdownHook] DEBUG org.springframework.context.support.GenericApplicationContext - Closing org.springframework.context.support.GenericApplicationContext@234a8f27, started on Mon Apr 06 21:38:47 UTC 2026
+ 2026-04-06T21:39:51.4050386Z 21:39:51.326 [SpringContextShutdownHook] DEBUG org.springframework.context.support.DefaultLifecycleProcessor - Stopping beans in phase 2147483647
+ 2026-04-06T21:39:51.4059125Z 21:39:51.327 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED paused.
+ 2026-04-06T21:39:51.4061909Z 21:39:51.327 [SpringContextShutdownHook] DEBUG org.springframework.context.support.DefaultLifecycleProcessor - Bean 'org.springframework.scheduling.quartz.SchedulerFactoryBean#0' completed its stop procedure
+ 2026-04-06T21:39:51.4064065Z 21:39:51.327 [SpringContextShutdownHook] INFO org.springframework.scheduling.quartz.SchedulerFactoryBean - Shutting down Quartz Scheduler
+ 2026-04-06T21:39:51.4066161Z 21:39:51.327 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED shutting down.
+ 2026-04-06T21:39:51.4068602Z 21:39:51.327 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED paused.
+ 2026-04-06T21:39:51.4077224Z 21:39:51.327 [SpringContextShutdownHook] DEBUG org.quartz.simpl.SimpleThreadPool - Shutting down threadpool...
+ 2026-04-06T21:39:51.4083941Z 21:39:51.327 [SpringContextShutdownHook] DEBUG org.quartz.simpl.SimpleThreadPool - Shutdown of threadpool complete.
+ 2026-04-06T21:39:51.4091341Z 21:39:51.327 [SpringContextShutdownHook] INFO org.quartz.core.QuartzScheduler - Scheduler org.springframework.scheduling.quartz.SchedulerFactoryBean#0_$_NON_CLUSTERED shutdown complete.
+ 2026-04-06T21:39:51.4098402Z 21:39:51.328 [SpringContextShutdownHook] INFO org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor - Shutting down ExecutorService 'killPool'
+ 2026-04-06T21:39:51.4111402Z 21:39:51.328 [SpringContextShutdownHook] INFO com.imageworks.common.spring.remoting.GrpcServer - gRPC server shutting down on cueBotGrpc at port 8453
+ 2026-04-06T21:39:51.4113204Z 21:39:51.332 [postgres:pid(502)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-04-06 21:39:51.332 UTC [502] LOG:  received fast shutdown request
+ 2026-04-06T21:39:51.4115014Z 21:39:51.334 [postgres:pid(502)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-04-06 21:39:51.333 UTC [502] LOG:  aborting any active transactions
+ 2026-04-06T21:39:51.4121946Z 21:39:51.336 [postgres:pid(502)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-04-06 21:39:51.336 UTC [502] LOG:  background worker "logical replication launcher" (PID 510) exited with exit code 1
+ 2026-04-06T21:39:51.4123987Z 21:39:51.336 [postgres:pid(502)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-04-06 21:39:51.336 UTC [505] LOG:  shutting down
+ 2026-04-06T21:39:51.4128578Z 21:39:51.342 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-7] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4130739Z 21:39:51.342 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-3] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4132634Z 21:39:51.345 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-6] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4134477Z 21:39:51.345 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-4] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4136483Z 21:39:51.348 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-5] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4138308Z 21:39:51.361 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-1] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4140150Z 21:39:51.364 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-2] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4141954Z 21:39:51.388 [postgres:pid(502)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 2026-04-06 21:39:51.388 UTC [502] LOG:  database system is shut down
+ 2026-04-06T21:39:51.4144047Z 21:39:51.389 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-8] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4146073Z 21:39:51.389 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-10] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.4147993Z 21:39:51.389 [org.springframework.scheduling.quartz.SchedulerFactoryBean#0_Worker-9] DEBUG org.quartz.simpl.SimpleThreadPool - WorkerThread is shut down.
+ 2026-04-06T21:39:51.5044529Z 21:39:51.432 [pg_ctl:pid(2111)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - waiting for server to shut down.... done
+ 2026-04-06T21:39:51.5046124Z 21:39:51.432 [pg_ctl:pid(2111)] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - server stopped
+ 2026-04-06T21:39:51.5053599Z 21:39:51.433 [postgres-79ffc272-40a9-4bcd-839a-7fdac62c342e-closer] INFO io.zonky.test.db.postgres.embedded.EmbeddedPostgres - 79ffc272-40a9-4bcd-839a-7fdac62c342e shut down postmaster in 00:00:00.108
+ 2026-04-06T21:39:51.5086109Z 21:39:51.440 [SpringContextShutdownHook] INFO org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor - Shutting down ExecutorService 'launchQueue'
+ 2026-04-06T21:39:51.5087985Z 21:39:51.441 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportHandler - Shutting down HostReportHandler.
+ 2026-04-06T21:39:51.5089723Z 21:39:51.441 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportQueue - Shutting down report pool, currently 0 active threads.
+ 2026-04-06T21:39:51.5091505Z 21:39:51.441 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.FrameCompleteHandler - Shutting down FrameCompleteHandler.
+ 2026-04-06T21:39:51.5093495Z 21:39:51.441 [SpringContextShutdownHook] DEBUG org.apache.activemq.jms.pool.PooledConnectionFactory - Stopping the PooledConnectionFactory, number of connections in cache: 0
+ 2026-04-06T21:39:51.5095429Z 21:39:51.443 [SpringContextShutdownHook] INFO com.imageworks.spcue.monitoring.KafkaEventPublisher - Kafka event publisher shut down
+ 2026-04-06T21:39:51.5117571Z 21:39:51.443 [SpringContextShutdownHook] INFO com.imageworks.spcue.dispatcher.HostReportQueue - Shutting down report pool, currently 0 active threads.
+ 2026-04-06T21:39:51.5119204Z 21:39:51.444 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool DispatchQueue, currently 0 active threads.
+ 2026-04-06T21:39:51.5120585Z 21:39:51.444 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool ManageQueue, currently 0 active threads.
+ 2026-04-06T21:39:51.5121982Z 21:39:51.444 [SpringContextShutdownHook] INFO HEALTH - Shutting down thread pool BookingQueue, currently 0 active threads.
+ 2026-04-06T21:39:54.7066193Z 
+ 2026-04-06T21:39:54.7066660Z > Task :jacocoTestReport
+ 2026-04-06T21:40:06.4037524Z 
+ 2026-04-06T21:40:06.4042705Z SLF4J(W): No SLF4J providers were found.
+ 2026-04-06T21:40:06.4043428Z SLF4J(W): Defaulting to no-operation (NOP) logger implementation
+ 2026-04-06T21:40:06.4044291Z SLF4J(W): See https://www.slf4j.org/codes.html#noProviders for further details.
+ 2026-04-06T21:40:06.4048626Z > Task :sonarqube
+ 2026-04-06T21:41:15.4068449Z 
+ 2026-04-06T21:41:15.4071859Z 
+ 2026-04-06T21:41:15.4072378Z > Task :sonarqube FAILED
+ 2026-04-06T21:41:15.4076515Z FAILURE: Build failed with an exception.
+ 2026-04-06T21:41:15.4076877Z 
+ 2026-04-06T21:41:15.4079919Z 
+ 2026-04-06T21:41:15.4080491Z Deprecated Gradle features were used in this build, making it incompatible with Gradle 8.0.
+ 2026-04-06T21:41:15.4081136Z 
+ 2026-04-06T21:41:15.4081831Z You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+ 2026-04-06T21:41:15.4082631Z 
+ 2026-04-06T21:41:15.4083119Z See https://docs.gradle.org/7.6.2/userguide/command_line_interface.html#sec:command_line_warnings
+ 2026-04-06T21:41:15.4083905Z 12 actionable tasks: 12 executed
+ 2026-04-06T21:41:15.4084456Z * What went wrong:
+ 2026-04-06T21:41:15.4084894Z Execution failed for task ':sonarqube'.
+ 2026-04-06T21:41:15.4086125Z > Java heap space
+ 2026-04-06T21:41:15.4086418Z 
+ 2026-04-06T21:41:15.4096276Z * Try:
+ 2026-04-06T21:41:15.4105902Z > Run with --stacktrace option to get the stack trace.
+ 2026-04-06T21:41:15.4107501Z > Run with --info or --debug option to get more log output.
+ 2026-04-06T21:41:15.4109463Z > Run with --scan to get full insights.
+ 2026-04-06T21:41:15.4109792Z 
+ 2026-04-06T21:41:15.4109985Z * Get more help at https://help.gradle.org
+ 2026-04-06T21:41:15.4110323Z 
+ 2026-04-06T21:41:15.4110454Z BUILD FAILED in 3m 59s
+ 2026-04-06T21:41:15.7400934Z ##[error]Process completed with exit code 1.
+ 2026-04-06T21:41:15.7506737Z Post job cleanup.
+ 2026-04-06T21:41:15.7511303Z ##[command]/usr/bin/docker exec  f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48 sh -c "cat /etc/*release | grep ^ID"
+ 2026-04-06T21:41:15.9649854Z [command]/usr/bin/git version
+ 2026-04-06T21:41:15.9715949Z git version 2.43.5
+ 2026-04-06T21:41:15.9784156Z Temporarily overriding HOME='/__w/_temp/3f8030b9-e2ed-4d5f-9688-08d8812ef695' before making global git config changes
+ 2026-04-06T21:41:15.9785122Z Adding repository directory to the temporary git global config as a safe directory
+ 2026-04-06T21:41:15.9792111Z [command]/usr/bin/git config --global --add safe.directory /__w/OpenCue/OpenCue
+ 2026-04-06T21:41:15.9855400Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+ 2026-04-06T21:41:15.9913776Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+ 2026-04-06T21:41:16.0585203Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+ 2026-04-06T21:41:16.0647345Z http.https://github.com/.extraheader
+ 2026-04-06T21:41:16.0666032Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+ 2026-04-06T21:41:16.0730904Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+ 2026-04-06T21:41:16.1401919Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+ 2026-04-06T21:41:16.1458134Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+ 2026-04-06T21:41:16.2190153Z Stop and remove container: 753b150d00434c469fbf91cf07bb81f0_aswfciopencue20241_40ad0f
+ 2026-04-06T21:41:16.2194450Z ##[command]/usr/bin/docker rm --force f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:41:18.4940104Z f43abb45866c0b329a377cbe0d0f9d7b96cb5795e0794f929ab76f7d5e59cd48
+ 2026-04-06T21:41:18.4972230Z Remove container network: github_network_bde1d8ceb1c341ec9624c8af86bc9ffd
+ 2026-04-06T21:41:18.4976825Z ##[command]/usr/bin/docker network rm github_network_bde1d8ceb1c341ec9624c8af86bc9ffd
+ 2026-04-06T21:41:18.6302035Z github_network_bde1d8ceb1c341ec9624c8af86bc9ffd
+ 2026-04-06T21:41:18.6367290Z Cleaning up orphan processes
+ 2026-04-06T21:41:18.6699717Z ##[warning]Node.js 20 actions are deprecated. The following actions are running on Node.js 20 and may not work as expected: actions/checkout@v4. Actions will be forced to run with Node.js 24 by default starting June 2nd, 2026. Node.js 20 will be removed from the runner on September 16th, 2026. Please check if updated versions of these actions are available that support Node.js 24. To opt into Node.js 24 now, set the FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true environment variable on the runner or in your workflow file. Once Node.js 24 becomes the default, you can temporarily opt out by setting ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+
+
+<context ref="file:///Users/dtavares/dev/OpenCue/.github/workflows/sonar-cloud-pipeline.yml">
+name: OpenCue SonarCloud Pipeline
+
+# Trigger this pipeline on new commits to master.
+on:
+  push:
+    branches: [ master ]
+
+jobs:
+  analyze_python:
+    runs-on: ubuntu-22.04
+    container: aswf/ci-opencue:2024.1
+    name: Analyze Python Components
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-tags: true
+          fetch-depth: 0
+
+      - name: Mark repository as safe (Fix for https://github.com/actions/checkout/issues/1048)
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Generate coverage report
+        run: ci/python_coverage_report.sh
+
+      - name: Analyze and send to SonarCloud
+        uses: sonarsource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  analyze_cuebot:
+    runs-on: ubuntu-22.04
+    container: aswf/ci-opencue:2024.1
+    name: Analyze Cuebot
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Fetch all Git history, otherwise the current version number will
+          # not be correctly calculated.
+          fetch-depth: 0
+
+      - name: Analyze and send to SonarCloud
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          sudo yum -y install java-17-openjdk.x86_64
+          sudo yum -y install java-17-openjdk-devel.x86_64
+          sudo alternatives --set java java-17-openjdk.x86_64
+          sudo alternatives --set javac java-17-openjdk.x86_64
+          sudo alternatives --set jre_openjdk java-17-openjdk.x86_64
+          chown -R aswfuser:aswfgroup .
+          su -c "cd cuebot && ./gradlew jacocoTestReport sonar" aswfuser
+
+</context>
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+Add the env var to the pipeline step
+
+---
+
+[Request interrupted by user]
