@@ -50,7 +50,7 @@ This is the load-bearing design choice; everything else falls out of it.
 
 | Component | Hot path | Slow path |
 |---|---|---|
-| Rust scheduler (booking) | Atomic Lua against Redis (`check + 5×HINCRBY + INCR acct:seq`), then `INSERT proc` in PG transactionally | Periodic recompute (every 2 min) writes PG accounting tables for scheduler-managed shows from `SUM(proc)` |
+| Rust scheduler (booking) | Atomic Lua against Redis (`check + 5×HINCRBY + INCR acct:seq`), then `INSERT proc` in PG transactionally | Periodic recompute (every 2 min): overwrites PG accounting tables for scheduler-managed shows from `SUM(proc)`, and applies a lock-free relative-delta correction to the Redis booked counters (no `acct:seq` lock) |
 | Cuebot release path (`ProcDaoJdbc.unbookProc`) | For scheduler-managed shows: only `DELETE proc` transactionally, then `afterCommit` publishes the release delta to Redis. For Cuebot-managed shows: unchanged transactional UPDATEs against accounting tables | - |
 | Cuebot admin paths (size/burst/min/max changes) | Unchanged transactional UPDATEs against accounting tables; **no Redis publish** | - |
 | CueGUI | Reads PG accounting tables (unchanged) | - |
@@ -174,11 +174,15 @@ sentinel through unchanged keeps `redis-cli` output faithful to the PG meaning.
 
 ---
 
-## The `acct:seq` sequence-number guard
+## Keeping reseeds safe against concurrent bookings
 
-`acct:seq` is a monotonic counter in Redis that protects every reseed from a
-silent-loss race against concurrent hot-path writes. It is not optional
-machinery added later - it is the reseed contract.
+A reseed reconciles the Redis booked counters against `proc` truth while live
+bookings are still mutating those counters. Two different mechanisms guard that
+window: a **lock-free relative-delta reconcile** in steady state (no
+`acct:seq`), and the **`acct:seq` compare-and-swap** at bootstrap only.
+`acct:seq` is a monotonic counter bumped by every mutating Lua (booking,
+force-rollback, Cuebot release); the steady-state reconcile deliberately does
+*not* use it, for the starvation reason below.
 
 ### The race it prevents
 
@@ -203,39 +207,51 @@ At t3, the booking from t2 is silently lost in Redis. `proc` is correct, but
 Redis under-counts → the next dispatch over-books. This does **not** self-heal
 - every reseed cycle reopens the same window.
 
-### The protocol
+### Two ways to make that window safe
 
-Every mutating Lua script (booking, force-rollback, Cuebot release publisher)
-increments `acct:seq` as part of the same script. Reseed becomes a
-compare-and-swap on the entire state:
+**Steady state - lock-free relative delta (no `acct:seq`).** The periodic
+booked-counter recompute never overwrites the counters. It computes a per-key
+`delta = truth − redis_snapshot` and applies it with `HINCRBY` (the
+`RECONCILE_DELTA` Lua). A concurrent booking is also an `HINCRBY` on the same
+key, so the booking and the correction add together - neither is lost - and
+**no lock is needed**:
 
-1. `GET acct:seq` → store as `seq_before`.
-2. `SELECT SUM(...) FROM proc` (or read accounting tables, for the limit
-   reseed).
-3. Compute the new Redis values in memory.
-4. Atomic CAS via Lua: *if `GET acct:seq == seq_before` then write the new
-   values, else return RETRY*.
-5. On RETRY: loop back to (1). After a bounded number of retries under
-   sustained load, skip this reseed cycle. Hot-path writes are keeping Redis
-   fresh; a reseed that can't make progress is the wrong tool.
+| t | Event | Redis `int_cores` |
+|---|---|---|
+| t0 | counter drifted high; truth is 10 | 50 |
+| t1 | reconcile snapshots redis=50 → delta = 10 − 50 = −40 | 50 |
+| t2 | a +10 booking lands first | 60 |
+| t3 | reconcile applies −40 | 20 |
+| | 20 = truth(10) + booking(10) — drift fixed, booking kept | 20 |
 
-The same trace with the guard:
+The reconcile is read-ordered (Redis read *before* `proc`) so the unavoidable
+one-read-gap of residual drift biases each counter slightly **high** - the safe
+near-cap-wait direction the matcher's `min(redis, proc)` gate already absorbs -
+rather than low, which would over-book past a cap. The residual is re-measured
+each cycle and never accumulates.
 
-| t | Event | `acct:seq` | Redis `int_cores` |
-|---|---|---|---|
-| t0 | start | 100 | 50 |
-| t1 | Reseed reads `seq_before=100`, SELECT SUM=50 | 100 | 50 |
-| t2 | Booking Lua: HINCRBY +10, INCR seq | **101** | 60 |
-| t3 | Reseed CAS: seq is 101 ≠ 100 → RETRY | 101 | 60 |
-| t4 | Reseed re-reads `seq_before=101`, SELECT SUM=60 | 101 | 60 |
-| t5 | No mutations during window | 101 | 60 |
-| t6 | Reseed CAS succeeds: HSET ... 60 | 101 | 60 |
+**Why not the CAS here?** The original design *did* overwrite under an
+`acct:seq` CAS - read seq, snapshot `proc`, write iff seq unchanged, else retry,
+and after a bounded budget *skip the cycle*. Because every booking and
+force-rollback bumps the single global `acct:seq`, sustained booking load - the
+8-show peak - meant the CAS could never win, whole reconcile cycles were
+skipped, and counters drifted unbounded. That starvation was a real production
+bug; the relative-delta reconcile removes the lock and is immune to it.
 
-No write is clobbered.
+**Bootstrap - absolute reseed under the CAS.** At startup there is no hot-path
+traffic, the counters must be written from absolute truth (not nudged from an
+unknown prior state), and a reseed that loses the race should *fail loudly*, not
+silently skip. So the bootstrap keeps the CAS (the `RESEED_CAS` Lua): read
+`seq_before`, snapshot, write iff `acct:seq` unchanged, else retry up to
+`cas_max_retries`; on exhaustion it is a **fatal startup gate** - the scheduler
+refuses to dispatch against an unseeded Redis. With no concurrent bookings at
+startup, there is nothing to starve it.
 
-The mechanism is the same as the `AtomicU64` sequence guard from the earlier
-in-process design - with the counter moved into Redis so it's visible across
-processes. Once N>1 schedulers run, this property generalises directly.
+Both reseed scripts leave `acct:seq` untouched (reseed is reconciliation, not a
+booking). The CAS is the cross-process generalisation of the earlier in-process
+`AtomicU64` guard; once N>1 schedulers run it still detects concurrent bootstrap
+mutation, though leader election for the periodic loops remains a prerequisite
+(see [known limitations](#known-limitations-and-future-work)).
 
 ---
 
@@ -304,11 +320,14 @@ The result is dual-written to:
 - **PG accounting tables** - so CueGUI's view stays fresh for scheduler-managed
   shows. CueGUI reads PG unchanged; numbers may lag the actual booking state by
   up to one recompute interval.
-- **Redis `int_cores` / `int_gpus`** - guarded by the `acct:seq` CAS described
-  above.
+- **Redis `int_cores` / `int_gpus`** - corrected with a lock-free relative-delta
+  `HINCRBY` (`RECONCILE_DELTA`), never an absolute overwrite, so it takes no
+  `acct:seq` lock and cannot be starved by booking load (see [Keeping reseeds
+  safe](#keeping-reseeds-safe-against-concurrent-bookings)).
 
-The dual write happens under the same SUM query for consistency: both PG and
-Redis end up showing the same snapshot.
+Both writes derive from the same `SUM(proc)` snapshot: the PG tables are
+overwritten, the Redis counters are nudged toward that snapshot by their current
+drift.
 
 #### Zero-convergence for drained keys
 
@@ -521,7 +540,7 @@ Brief versions; the trade-off matters more than the alternative chosen.
 | Per-show vs per-allocation granularity | Per-show only | Mixed-mode shows not supported |
 | How PG accounting tables stay current for scheduler-managed shows | Periodic recompute from `SUM(proc)` | CueGUI lag bounded by recompute interval (2 min) |
 | How Cuebot release path stays current in Redis | `afterCommit` publish on the release path only - **no** publish on admin/lifecycle paths | Cuebot admin changes propagate to Redis via the 5-min limit reseed, not instantly |
-| Concurrency safety on reseeds | `acct:seq` CAS guard on every reseed | Rare RETRY loop under sustained load; bounded by a max-retries cap |
+| Concurrency safety on reseeds | Steady-state recompute uses a lock-free relative-delta `HINCRBY` (never starved); `acct:seq` CAS retained for the bootstrap absolute reseed only | Bootstrap CAS can exhaust its retry budget and gate startup - intended (fail loud, never a silent steady-state skip) |
 | Idempotency on the booking Lua | None - trust caller retry semantics | Duplicate bookings double-count in Redis until next recompute heals |
 | Bootstrap behavior | Blocking reseed at startup, always | Scheduler startup time increases by the bootstrap reseed duration |
 | Redis client choice | `redis-rs` (Rust, async with built-in pooling); Lettuce (Java, composes with Spring DI and `TransactionSynchronization.afterCommit`) | Two clients to maintain awareness of |
