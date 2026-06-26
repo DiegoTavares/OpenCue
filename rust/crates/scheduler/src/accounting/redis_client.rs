@@ -16,11 +16,13 @@
 //       the dispatcher idles; if Redis is restarted empty, the next booking will populate
 //       acct:* hashes from zero - limit fields will be missing until the next limit reseed (5 min).
 
+use std::collections::HashMap;
+
 use redis::{aio::ConnectionManager, AsyncCommands, Script};
 
 use crate::accounting::booking_delta::{BookingDelta, SEQ_KEY};
 use crate::accounting::error::AccountingError;
-use crate::accounting::lua::{BOOK_OR_FORCE, RESEED_CAS};
+use crate::accounting::lua::{BOOK_OR_FORCE, RECONCILE_DELTA, RESEED_CAS};
 use crate::config::RedisConfig;
 
 /// One value to write during a reseed: HSET `key` `field` `value`.
@@ -73,6 +75,7 @@ pub struct RedisAccounting {
     conn: ConnectionManager,
     book_script: Script,
     reseed_script: Script,
+    reconcile_script: Script,
 }
 
 impl RedisAccounting {
@@ -84,6 +87,7 @@ impl RedisAccounting {
             conn,
             book_script: Script::new(BOOK_OR_FORCE),
             reseed_script: Script::new(RESEED_CAS),
+            reconcile_script: Script::new(RECONCILE_DELTA),
         })
     }
 
@@ -162,6 +166,57 @@ impl RedisAccounting {
                 .ignore();
         }
         let _: () = pipe.query_async(&mut conn).await?;
+        Ok(())
+    }
+
+    /// Bulk-reads the `int_cores`/`int_gpus` fields of the given `acct:*` hashes in
+    /// one pipelined round-trip. Missing key/field => 0. Returned map is keyed by
+    /// the hash key, value `(int_cores, int_gpus)`. Used by the delta reconcile to
+    /// snapshot the current counters before computing the `truth - redis` drift.
+    pub async fn read_counter_fields(
+        &self,
+        keys: &[String],
+    ) -> Result<HashMap<String, (i64, i64)>, AccountingError> {
+        if keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut conn = self.conn.clone();
+        let mut pipe = redis::pipe();
+        for key in keys {
+            pipe.cmd("HMGET")
+                .arg(key.as_str())
+                .arg("int_cores")
+                .arg("int_gpus");
+        }
+        let raw: Vec<(Option<i64>, Option<i64>)> = pipe.query_async(&mut conn).await?;
+        Ok(keys
+            .iter()
+            .cloned()
+            .zip(raw)
+            .map(|(k, (cores, gpus))| (k, (cores.unwrap_or(0), gpus.unwrap_or(0))))
+            .collect())
+    }
+
+    /// Applies `ops` as ungated `HINCRBY` deltas (floored at 0) in a single
+    /// `RECONCILE_DELTA` Lua call. No `acct:seq` CAS: the relative correction
+    /// composes with concurrent booking increments instead of clobbering them, so
+    /// the reconcile can never be starved by booking write pressure (the failure
+    /// mode that left job/sub counters drifting unbounded under load). Each
+    /// `ReseedOp.value` here is a *delta* (`truth - redis_snapshot`), not an
+    /// absolute target.
+    pub async fn reconcile_delta(&self, ops: &[ReseedOp]) -> Result<(), AccountingError> {
+        if ops.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.conn.clone();
+        let mut invocation = self.reconcile_script.prepare_invoke();
+        invocation.arg(ops.len().to_string());
+        for op in ops {
+            invocation.arg(op.key.as_str());
+            invocation.arg(op.field);
+            invocation.arg(op.value.to_string());
+        }
+        let _: i64 = invocation.invoke_async(&mut conn).await?;
         Ok(())
     }
 

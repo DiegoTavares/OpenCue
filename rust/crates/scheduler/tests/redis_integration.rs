@@ -23,7 +23,7 @@ use std::time::Duration;
 use redis::aio::ConnectionManager;
 use redis::{AsyncCommands, Client, Script};
 use scheduler::accounting::booking_delta::{BookingDelta, SEQ_KEY};
-use scheduler::accounting::lua::{BOOK_OR_FORCE, RESEED_CAS};
+use scheduler::accounting::lua::{BOOK_OR_FORCE, RECONCILE_DELTA, RESEED_CAS};
 use scheduler::accounting::redis_client::ReseedOp;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -36,6 +36,7 @@ struct RedisHarness {
     conn: ConnectionManager,
     book_script: Script,
     reseed_script: Script,
+    reconcile_script: Script,
 }
 
 impl RedisHarness {
@@ -53,6 +54,7 @@ impl RedisHarness {
             conn,
             book_script: Script::new(BOOK_OR_FORCE),
             reseed_script: Script::new(RESEED_CAS),
+            reconcile_script: Script::new(RECONCILE_DELTA),
         }
     }
 
@@ -98,6 +100,20 @@ impl RedisHarness {
                 .arg(op.value.to_string());
         }
         inv.invoke_async(&mut conn).await.expect("RESEED_CAS")
+    }
+
+    /// Ungated delta reconcile: each op's `value` is a *delta* applied via HINCRBY
+    /// (floored at 0), no `acct:seq` CAS. Returns the op count the Lua processed.
+    async fn reconcile(&self, ops: &[ReseedOp]) -> i64 {
+        let mut conn = self.conn.clone();
+        let mut inv = self.reconcile_script.prepare_invoke();
+        inv.arg(ops.len().to_string());
+        for op in ops {
+            inv.arg(op.key.as_str())
+                .arg(op.field)
+                .arg(op.value.to_string());
+        }
+        inv.invoke_async(&mut conn).await.expect("RECONCILE_DELTA")
     }
 
     async fn hget_i64(&self, key: &str, field: &str) -> Option<i64> {
@@ -478,4 +494,105 @@ async fn force_with_negative_delta_decrements() {
 
     // Sanity: brief wait to ensure no race-condition log spam.
     sleep(Duration::from_millis(10)).await;
+}
+
+#[tokio::test]
+async fn reconcile_delta_composes_with_concurrent_booking() {
+    // The delta reconcile's reason for existing: unlike RESEED_CAS's absolute
+    // overwrite (which must CAS to avoid clobbering a concurrent booking), the
+    // relative HINCRBY composes, so it needs no seq guard and can never be starved.
+    // Reconcile snapshots redis=50 while proc truth=10 (drift +40 -> delta -40).
+    // Before it applies, a booking of +10 lands (counter 50 -> 60). The ungated
+    // HINCRBY composes: 60 + (-40) = 20 = truth(10) + booking(10). The drift is
+    // corrected AND the concurrent booking is preserved -- no clobber.
+    let h = RedisHarness::new().await;
+    let show = Uuid::new_v4();
+    let alloc = Uuid::new_v4();
+    let key = format!("acct:sub:{}:{}", show, alloc);
+
+    h.set_field(&key, "int_cores", 50).await;
+    h.set_burst(&key, 1000).await;
+
+    // (t1) Reconcile snapshot: redis=50, proc truth=10 => delta = 10 - 50 = -40.
+    let redis_snapshot = h.hget_i64(&key, "int_cores").await.unwrap();
+    assert_eq!(redis_snapshot, 50);
+    let delta = 10 - redis_snapshot; // -40
+
+    // (t2) Concurrent booking bumps the counter 50 -> 60.
+    let _ = h.book(&RedisHarness::delta(show, alloc, 10, 0), "0").await;
+    assert_eq!(h.hget_i64(&key, "int_cores").await, Some(60));
+
+    // (t3) Reconcile applies its (stale) delta with no CAS guard.
+    let applied = h
+        .reconcile(&[ReseedOp {
+            key: key.clone(),
+            field: "int_cores",
+            value: delta,
+        }])
+        .await;
+    assert_eq!(applied, 1);
+    assert_eq!(
+        h.hget_i64(&key, "int_cores").await,
+        Some(20),
+        "delta corrected drift (-40) and preserved the concurrent +10 booking"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_delta_floors_negative_counter_at_zero() {
+    // An overshoot (a release double-counted, or truth below an already-draining
+    // counter) must never leave a negative counter -- the booking Lua would read a
+    // negative `cur_job`/`cur_sub` as unlimited headroom and over-book. RECONCILE_DELTA
+    // floors each field at 0 after the increment.
+    let h = RedisHarness::new().await;
+    let key = format!("acct:job:{}", Uuid::new_v4());
+    h.set_field(&key, "int_cores", 5).await;
+
+    // Delta -20 against a counter of 5 => 5 - 20 = -15, floored to 0.
+    let applied = h
+        .reconcile(&[ReseedOp {
+            key: key.clone(),
+            field: "int_cores",
+            value: -20,
+        }])
+        .await;
+    assert_eq!(applied, 1);
+    assert_eq!(
+        h.hget_i64(&key, "int_cores").await,
+        Some(0),
+        "negative result floored to 0, never left negative"
+    );
+}
+
+#[tokio::test]
+async fn reconcile_delta_does_not_bump_seq_and_skips_zero() {
+    // Reconciliation, not mutation: bumping acct:seq would needlessly invalidate a
+    // concurrent bootstrap RESEED_CAS. A zero delta is a no-op.
+    let h = RedisHarness::new().await;
+    let key = format!("acct:job:{}", Uuid::new_v4());
+    h.set_field(&key, "int_cores", 10).await;
+    let seq_before = h.get_seq().await;
+
+    let applied = h
+        .reconcile(&[
+            ReseedOp {
+                key: key.clone(),
+                field: "int_cores",
+                value: -3,
+            },
+            ReseedOp {
+                key: key.clone(),
+                field: "int_gpus",
+                value: 0, // zero delta: no-op
+            },
+        ])
+        .await;
+
+    assert_eq!(applied, 2, "Lua iterates all ops it is handed");
+    assert_eq!(h.hget_i64(&key, "int_cores").await, Some(7));
+    assert_eq!(
+        h.get_seq().await,
+        seq_before,
+        "reconcile must not bump acct:seq"
+    );
 }

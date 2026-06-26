@@ -139,3 +139,56 @@ for i = 0, n - 1 do
 end
 return 1
 "#;
+
+/// Nudges each booked counter back toward its true value (from `SUM(proc)`) by
+/// *adding* a small correction, rather than overwriting it. The caller passes a
+/// per-key `delta = truth - redis`, computed from a snapshot it took a moment ago,
+/// and this script applies it with `HINCRBY`.
+///
+/// Why add instead of overwrite (`HSET`)? A frame booking happening at the same
+/// instant is also an `HINCRBY` on the same counter, so the booking and the
+/// correction simply add together,  neither is lost. An `HSET` overwrite would
+/// erase a booking that landed after the snapshot, which is exactly why the old
+/// absolute reseed (`RESEED_CAS`) needed an `acct:seq` lock to exclude concurrent
+/// bookings. That lock was the bug: under booking load `acct:seq` changed faster
+/// than the reseed could win it, so whole reconcile cycles were skipped and the
+/// counters drifted unbounded. Because adding is safe with concurrent bookings,
+/// this script needs no lock and always runs.
+///
+/// Worked example,  counter is drifted high at 50, the truth is 10 (delta -40):
+///   - snapshot reads redis = 50, so delta = 10 - 50 = -40
+///   - a +10 booking lands first:            50 -> 60
+///   - this script applies the -40:          60 -> 20
+///   - result 20 = truth(10) + booking(10)   ✓ drift fixed, booking kept
+///
+/// Other details:
+///   - Does NOT bump `acct:seq` (it's reconciliation, not a booking), so it never
+///     disturbs the bootstrap `RESEED_CAS`.
+///   - Floors each field at 0: a correction that overshoots must never leave a
+///     negative counter, which the booking Lua would misread as unlimited headroom.
+///
+/// Args (ARGV-only, like `RESEED_CAS`, to dodge the EVALSHA key-count ceiling when
+/// correcting thousands of counters at once; single-node Redis per design §2.4):
+/// ```text
+/// ARGV[1] = n_ops
+/// For each op i in 0..n_ops-1:
+///   ARGV[1 + 3*i + 1] = key
+///   ARGV[1 + 3*i + 2] = field
+///   ARGV[1 + 3*i + 3] = delta   (truth - redis_snapshot)
+/// ```
+pub const RECONCILE_DELTA: &str = r#"
+local n = tonumber(ARGV[1])
+for i = 0, n - 1 do
+  local base = 1 + i * 3
+  local key   = ARGV[base + 1]
+  local field = ARGV[base + 2]
+  local delta = tonumber(ARGV[base + 3])
+  if delta ~= 0 then
+    local v = redis.call('HINCRBY', key, field, delta)
+    if v < 0 then
+      redis.call('HSET', key, field, 0)
+    end
+  end
+end
+return n
+"#;

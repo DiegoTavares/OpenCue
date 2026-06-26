@@ -19,8 +19,12 @@ use tracing::trace;
 use uuid::Uuid;
 
 use crate::{
-    cluster::Cluster, config::CONFIG, dao::helpers::parse_uuid,
-    metrics::observe_job_query_duration, models::DispatchJob, pgpool::connection_pool,
+    cluster::Cluster,
+    config::CONFIG,
+    dao::helpers::parse_uuid,
+    metrics::observe_job_query_duration,
+    models::{CoreSize, DispatchJob},
+    pgpool::connection_pool,
 };
 
 /// Data Access Object for job operations in the job dispatch system.
@@ -42,6 +46,9 @@ pub struct JobModel {
     pub pk_job: String,
     pub int_priority: i32,
     pub show_name: String,
+    /// Live per-job booked cores in centicores (`SUM(proc.int_cores_reserved)` for
+    /// this job). Floors the matcher's Redis job-cap read,  see [`DispatchJob`].
+    pub int_live_cores: i32,
 }
 
 /// One active (facility, show, tag) tuple from [`JobDao::scan_active_tags`].
@@ -74,6 +81,9 @@ impl DispatchJob {
         DispatchJob {
             id: parse_uuid(&model.pk_job),
             int_priority: model.int_priority,
+            // PG centicores -> whole cores, matching the unit of the Redis
+            // accounting counter the matcher compares this against.
+            live_job_cores: CoreSize::from_multiplied(model.int_live_cores).value(),
             source_cluster: cluster,
         }
     }
@@ -136,7 +146,8 @@ bookable_shows AS (
 SELECT
     j.pk_job,
     jr.int_priority,
-    bs.show_name
+    bs.show_name,
+    COALESCE(jl.cores, 0)::int AS int_live_cores
 FROM job j
 INNER JOIN bookable_shows bs ON j.pk_show = bs.pk_show
 INNER JOIN job_resource jr ON j.pk_job = jr.pk_job

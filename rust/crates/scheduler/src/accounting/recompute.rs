@@ -26,6 +26,7 @@
 //! PG writes are independent of Redis writes - even if Redis CAS keeps missing,
 //! PG converges. They are decoupled stores by design §2.1.
 
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
@@ -82,12 +83,18 @@ pub fn spawn_loop(service: Arc<AccountingService>) {
 
             let result = AssertUnwindSafe(async {
                 if let Err(err) = run_once(&service, &pg_dao).await {
+                    // The drift gauges are last-write-wins and only update on a
+                    // successful reconcile, so count failures explicitly, otherwise
+                    // a PG/Redis outage leaves them stuck at a stale, possibly-healthy
+                    // value with no signal.
+                    metrics::increment_reconcile_failure();
                     warn!("Recompute cycle failed: {err}");
                 }
             })
             .catch_unwind()
             .await;
             if let Err(e) = result {
+                metrics::increment_reconcile_failure();
                 error!("Recompute iteration panicked: {:?}", e);
             }
         }
@@ -114,8 +121,158 @@ async fn run_once(service: &AccountingService, pg_dao: &Arc<ResourceAccountingDa
         }
     }
 
-    // Redis side: CAS-guarded.
-    reseed_redis_once(service).await
+    reconcile_redis_once(service).await
+}
+
+/// Builds the enumerable cap-key strings (sub/folder/job/point,  NOT layer) from a
+/// baseline, in the same `acct:*` format as [`booked_ops_from_snapshot`]. These are
+/// proc-independent, so the delta reconcile reads their current Redis values BEFORE
+/// querying proc truth (residual-bias ordering, see [`reconcile_redis_once`]).
+fn baseline_key_strings(baseline: &BaselineKeys) -> Vec<String> {
+    let mut keys = Vec::with_capacity(
+        baseline.subs.len() + baseline.folders.len() + baseline.jobs.len() + baseline.points.len(),
+    );
+    for (show, alloc) in &baseline.subs {
+        keys.push(format!("acct:sub:{}:{}", show, alloc));
+    }
+    for folder in &baseline.folders {
+        keys.push(format!("acct:folder:{}", folder));
+    }
+    for job in &baseline.jobs {
+        keys.push(format!("acct:job:{}", job));
+    }
+    for (dept, show) in &baseline.points {
+        keys.push(format!("acct:point:{}:{}", dept, show));
+    }
+    keys
+}
+
+/// Converts absolute target ops (from [`booked_ops_from_snapshot`]) into delta ops
+/// `truth - current` against a Redis snapshot. Layer ops are dropped: nothing reads
+/// the layer counter (the booking Lua checks sub/folder/job; `read_job_cores_in_use`
+/// reads job), so its drift is cosmetic,  and its key is intentionally absent from
+/// the pre-read `current` map. A zero delta is skipped (no-op HINCRBY).
+fn delta_ops_from_targets(
+    target_ops: &[ReseedOp],
+    current: &HashMap<String, (i64, i64)>,
+) -> Vec<ReseedOp> {
+    target_ops
+        .iter()
+        .filter(|op| !op.key.starts_with("acct:layer:"))
+        .filter_map(|op| {
+            let (cur_cores, cur_gpus) = current.get(&op.key).copied().unwrap_or((0, 0));
+            let cur = if op.field == "int_gpus" {
+                cur_gpus
+            } else {
+                cur_cores
+            };
+            let delta = op.value - cur;
+            if delta == 0 {
+                None
+            } else {
+                Some(ReseedOp {
+                    key: op.key.clone(),
+                    field: op.field,
+                    value: delta,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Ungated delta reconcile of the booked-counter fields
+///
+/// Computes a per-key `truth - redis_snapshot` correction and applies it via
+/// `HINCRBY` (the `RECONCILE_DELTA` Lua). Because the correction is relative, a
+/// booking landing in the snapshot->apply window composes with it instead of being
+/// clobbered, so no `acct:seq` CAS is needed and the reconcile can never be starved
+/// by booking pressure. See the `RECONCILE_DELTA` Lua in `accounting::lua`.
+///
+/// Residual: PG `proc` and Redis cannot be snapshotted atomically, so the drift
+/// carries one read-gap of churn. Redis is read BEFORE proc so that, under
+/// increasing load, the residual biases each counter slightly HIGH (a transient,
+/// self-correcting near-cap wait already absorbed by the matcher's `min(redis, proc)` gate)
+/// rather than LOW (a transient over-book past a cap that would steal burst from other shows).
+/// It is re-measured every cycle, so it never accumulates.
+pub async fn reconcile_redis_once(service: &AccountingService) -> Result<()> {
+    // 1. Enumerable cap keys (proc-independent),  read their Redis values FIRST.
+    let baseline = service.dao().query_booked_baseline_keys().await?;
+    let mut current = service
+        .redis()
+        .read_counter_fields(&baseline_key_strings(&baseline))
+        .await
+        .into_diagnostic()?;
+
+    // 2. Proc truth, read AFTER Redis (residual-bias ordering above).
+    let rows = service.dao().query_booked_snapshot().await?;
+    let target_ops = booked_ops_from_snapshot(&rows, &baseline);
+
+    // 3. Any non-layer target key not covered by the baseline pre-read (a proc whose
+    //    sub/folder/job/point isn't enumerable,  rare) is read now so its delta is a
+    //    true correction, not a blind absolute add that would double-count. NOTE: this
+    //    read happens AFTER the proc snapshot, so for these (rare) keys the residual
+    //    bias is inverted to slightly LOW (the over-book direction) rather than the
+    //    HIGH bias the baseline keys get. Acceptable: the Lua cap stays authoritative
+    //    and the drift is re-measured and corrected next cycle.
+    let missing: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        target_ops
+            .iter()
+            .filter(|op| !op.key.starts_with("acct:layer:") && !current.contains_key(&op.key))
+            .filter(|op| seen.insert(op.key.clone()))
+            .map(|op| op.key.clone())
+            .collect()
+    };
+    if !missing.is_empty() {
+        let extra = service
+            .redis()
+            .read_counter_fields(&missing)
+            .await
+            .into_diagnostic()?;
+        current.extend(extra);
+    }
+
+    let delta_ops = delta_ops_from_targets(&target_ops, &current);
+    let n_deltas = delta_ops.len();
+
+    // Sample the drift this cycle is erasing before applying it. NET signed core
+    // drift (negative = Redis ran high, the wedge direction) is the leading
+    // indicator for the incident; ABS is total magnitude; keys is the count.
+    let (net_core_drift, abs_core_drift, keys_corrected) = core_drift_summary(&delta_ops);
+    metrics::set_reconcile_drift(net_core_drift, abs_core_drift, keys_corrected);
+
+    service
+        .redis()
+        .reconcile_delta(&delta_ops)
+        .await
+        .into_diagnostic()
+        .wrap_err("RECONCILE_DELTA for booked counters failed")?;
+    info!(
+        "Delta reconcile applied: {} corrections (net_core_drift={}, abs_core_drift={}, \
+         {} targets, {} rows)",
+        n_deltas,
+        net_core_drift,
+        abs_core_drift,
+        target_ops.len(),
+        rows.len()
+    );
+    Ok(())
+}
+
+/// Summarizes the `int_cores` corrections in a delta-op batch for the reconcile
+/// drift metric: `(net, abs, keys)` where `net` is the signed core-delta sum
+/// (negative => Redis ran high), `abs` is the magnitude sum, and `keys` is the
+/// number of counters with a non-zero core correction (one `int_cores` op per key).
+fn core_drift_summary(delta_ops: &[ReseedOp]) -> (i64, i64, i64) {
+    let mut net = 0i64;
+    let mut abs = 0i64;
+    let mut keys = 0i64;
+    for op in delta_ops.iter().filter(|op| op.field == "int_cores") {
+        net += op.value;
+        abs += op.value.abs();
+        keys += 1;
+    }
+    (net, abs, keys)
 }
 
 /// CAS-guarded reseed of the booked-counter fields (`int_cores`/`int_gpus`) on the
@@ -290,6 +447,104 @@ fn booked_ops_from_snapshot(rows: &[BookedSnapshotRow], baseline: &BaselineKeys)
 mod tests {
     use super::*;
     use uuid::Uuid;
+
+    fn job_op(key: &str, field: &'static str, value: i64) -> ReseedOp {
+        ReseedOp {
+            key: key.to_string(),
+            field,
+            value,
+        }
+    }
+
+    /// The wedge-correcting case: proc truth is low, Redis drifted high. The delta
+    /// must be negative and pull the counter back down to truth.
+    #[test]
+    fn delta_ops_correct_upward_drift_with_negative_delta() {
+        let key = format!("acct:job:{}", Uuid::new_v4());
+        // truth = 10 cores, Redis drifted to 500 (the incident scenario).
+        let targets = vec![job_op(&key, "int_cores", 10)];
+        let mut current = HashMap::new();
+        current.insert(key.clone(), (500, 0));
+
+        let deltas = delta_ops_from_targets(&targets, &current);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].value, -490); // 500 + (-490) = 10
+    }
+
+    /// truth - current for each field independently; a zero delta is dropped.
+    #[test]
+    fn delta_ops_per_field_and_skip_zero() {
+        let key = format!("acct:job:{}", Uuid::new_v4());
+        let targets = vec![job_op(&key, "int_cores", 40), job_op(&key, "int_gpus", 2)];
+        let mut current = HashMap::new();
+        current.insert(key.clone(), (25, 2)); // cores low by 15, gpus exact
+
+        let deltas = delta_ops_from_targets(&targets, &current);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].field, "int_cores");
+        assert_eq!(deltas[0].value, 15);
+    }
+
+    /// Layer ops are never reconciled (cosmetic counter, absent from the pre-read).
+    #[test]
+    fn delta_ops_drop_layer_keys() {
+        let key = format!("acct:layer:{}", Uuid::new_v4());
+        let targets = vec![job_op(&key, "int_cores", 99)];
+        let deltas = delta_ops_from_targets(&targets, &HashMap::new());
+        assert!(deltas.is_empty());
+    }
+
+    /// A non-layer key absent from the pre-read map is treated as current=0, so the
+    /// delta equals the target. (`reconcile_redis_once` guarantees such keys are
+    /// re-read before this runs, but the floor must be correct regardless.)
+    #[test]
+    fn delta_ops_absent_current_treated_as_zero() {
+        let key = format!("acct:job:{}", Uuid::new_v4());
+        let targets = vec![job_op(&key, "int_cores", 7)];
+        let deltas = delta_ops_from_targets(&targets, &HashMap::new());
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].value, 7);
+    }
+
+    /// Drift summary nets signed core deltas, sums magnitudes, counts core keys,
+    /// and ignores gpu ops.
+    #[test]
+    fn core_drift_summary_nets_and_magnitudes_cores_only() {
+        let job = format!("acct:job:{}", Uuid::new_v4());
+        let sub = format!("acct:sub:{}:{}", Uuid::new_v4(), Uuid::new_v4());
+        let ops = vec![
+            job_op(&job, "int_cores", -490), // Redis ran high (wedge direction)
+            job_op(&job, "int_gpus", 3),     // ignored: not a core correction
+            job_op(&sub, "int_cores", 12),   // Redis ran low
+        ];
+        let (net, abs, keys) = core_drift_summary(&ops);
+        assert_eq!(net, -478); // -490 + 12
+        assert_eq!(abs, 502); //  490 + 12
+        assert_eq!(keys, 2);
+    }
+
+    #[test]
+    fn baseline_key_strings_match_publisher_format_and_exclude_layers() {
+        let show = Uuid::new_v4();
+        let alloc = Uuid::new_v4();
+        let folder = Uuid::new_v4();
+        let job = Uuid::new_v4();
+        let dept = Uuid::new_v4();
+        let baseline = BaselineKeys {
+            subs: vec![(show, alloc)],
+            folders: vec![folder],
+            jobs: vec![job],
+            points: vec![(dept, show)],
+        };
+
+        let keys = baseline_key_strings(&baseline);
+        assert_eq!(keys.len(), 4);
+        assert!(keys.contains(&format!("acct:sub:{}:{}", show, alloc)));
+        assert!(keys.contains(&format!("acct:folder:{}", folder)));
+        assert!(keys.contains(&format!("acct:job:{}", job)));
+        assert!(keys.contains(&format!("acct:point:{}:{}", dept, show)));
+        assert!(!keys.iter().any(|k| k.starts_with("acct:layer:")));
+    }
 
     fn fixture_row() -> BookedSnapshotRow {
         // PG-shaped: `cores` is centicores per SUM(proc.int_cores_reserved). 4200 = 42 cores.

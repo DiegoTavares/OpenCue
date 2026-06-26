@@ -23,6 +23,12 @@ pub struct DispatchJob {
     pub id: Uuid,
     pub int_priority: i32,
     pub source_cluster: Cluster,
+    /// Live booked cores for this job (whole cores), summed from `proc` by the
+    /// pending-jobs fetch query. Floors the matcher's Redis job-cap read: that
+    /// counter drifts structurally *upward* (Cuebot release decrements are
+    /// best-effort, the reconcile is the only downward force), so the proc
+    /// snapshot is the accurate lower bound.
+    pub live_job_cores: i32,
 }
 
 impl fmt::Display for DispatchJob {

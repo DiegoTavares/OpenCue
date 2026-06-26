@@ -122,6 +122,9 @@ impl MatchingService {
         feed_sender: &mpsc::Sender<FeedMessage>,
     ) -> usize {
         let job_disp = format!("{}", job);
+        // Captured before `source_cluster` is moved below. Per-job proc snapshot
+        // used to floor the Redis job-cap read in `process_layer`.
+        let proc_job_cores_in_use = job.live_job_cores;
         let cluster = Arc::new(job.source_cluster);
         let mut frames_dispatched = 0;
 
@@ -169,7 +172,9 @@ impl MatchingService {
 
                     if layer_permit {
                         let layer_id = layer.id;
-                        frames_dispatched += self.process_layer(layer, cluster, feed_sender).await;
+                        frames_dispatched += self
+                            .process_layer(layer, cluster, proc_job_cores_in_use, feed_sender)
+                            .await;
                         debug!("{}: Processed layer", layer_disp);
 
                         self.layer_permit_service
@@ -220,6 +225,7 @@ impl MatchingService {
         &self,
         dispatch_layer: DispatchLayer,
         cluster: Arc<Cluster>,
+        proc_job_cores_in_use: i32,
         feed_sender: &mpsc::Sender<FeedMessage>,
     ) -> usize {
         let mut frames_dispatched: usize = 0;
@@ -229,8 +235,20 @@ impl MatchingService {
 
         // E-PVM live-usage snapshot taken once at permit entry (design Branch 2a).
         // Locally incremented per dispatched frame within the while-loop.
-        // Redis read failures degrade to 0, leaving the cap unbounded by live usage
-        // but still bounded by `job_max_cores`.
+        //
+        // On a successful read, floor the Redis counter by the live `proc` snapshot
+        // the fetch query computed for this job. The counter has two independent
+        // writers, the scheduler increments on book, Cuebot decrements on release,
+        // and is only pulled back to ground truth by the periodic reconcile. Release
+        // publishes are best-effort (swallowed on failure, gated on a per-Cuebot
+        // flag), so residual drift is structurally *upward*: a stale counter reads
+        // high, never low. Taking the `min` lets a stale-high value only ever
+        // *rescue* a job that proc-truth says has headroom,  it can never enable an
+        // over-book, because that direction selects the Redis value
+        // On a Redis read failure we fall back to the `proc` snapshot rather than 0:
+        // it's the accurate truth already in hand, so the pre-check still skips a
+        // genuinely-at-cap job instead of failing wide open. The Lua
+        // `BOOK_OR_FORCE` remains the authoritative cap either way.
         let initial_job_cores_in_use = match self
             .accounting
             .redis()
@@ -242,13 +260,14 @@ impl MatchingService {
             // write boundaries — see `lua.rs` unit invariant), so do NOT apply
             // `from_multiplied` here or the value is divided by the multiplier
             // a second time.
-            Ok(cores) => cores as i32,
+            Ok(cores) => (cores as i32).min(proc_job_cores_in_use),
             Err(err) => {
                 debug!(
-                    "read_job_cores_in_use failed for job {}: {}; defaulting to 0",
-                    dispatch_layer.job_id, err
+                    "read_job_cores_in_use failed for job {}: {}; falling back to \
+                     proc snapshot {}",
+                    dispatch_layer.job_id, err, proc_job_cores_in_use
                 );
-                0
+                proc_job_cores_in_use
             }
         };
         let mut local_job_cores_booked: i32 = 0;
@@ -260,9 +279,9 @@ impl MatchingService {
         // loop below). Skip it cheaply here, reusing the live `initial_job_cores_in_use`
         // snapshot read above. Unlike the subscription skip below, we do NOT sleep
         // the cluster: the job cap is per-job and sibling jobs in this cluster may
-        // still be dispatchable. Fail-open: a failed Redis read left
-        // `initial_job_cores_in_use` at 0, so the guard simply won't fire and the
-        // Lua call stays authoritative.
+        // still be dispatchable. `initial_job_cores_in_use` is floored by proc truth
+        // (and falls back to it on a Redis read failure), so the guard never fires on
+        // a job that proc says has headroom; the Lua call stays authoritative.
         if placement::job_at_core_cap(
             initial_job_cores_in_use,
             dispatch_layer.cores_min.value(),

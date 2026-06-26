@@ -249,6 +249,27 @@ async fn async_main() -> miette::Result<()> {
         ),
     }
 
+    // Book/release value symmetry with Cuebot is exact only when the Rust core
+    // multiplier matches Cuebot's hard-coded `CENTICORES_PER_CORE` (100): on book
+    // the scheduler increments the `acct:*` counters by `cores_reserved /
+    // multiplier`, and on release Cuebot decrements by `coresReserved / 100`
+    // (LettuceAccountingRedisPublisher). A mismatch makes every booking's increment
+    // and its eventual release asymmetric, so the booked counters drift on every
+    // frame and no reconcile can keep up. Refuse to start rather than silently
+    // corrupt accounting against a shared Redis.
+    const CUEBOT_CENTICORES_PER_CORE: u32 = 100;
+    if CONFIG.queue.core_multiplier != CUEBOT_CENTICORES_PER_CORE {
+        miette::bail!(
+            "queue.core_multiplier = {} but Cuebot's accounting publisher is hard-coded to {} \
+             centicores/core. A mismatch makes scheduler book-increments and Cuebot \
+             release-decrements asymmetric, drifting the Redis accounting counters on every \
+             frame. Set queue.core_multiplier = {}.",
+            CONFIG.queue.core_multiplier,
+            CUEBOT_CENTICORES_PER_CORE,
+            CUEBOT_CENTICORES_PER_CORE,
+        );
+    }
+
     let opts = JobQueueCli::from_args();
     let result = opts.run().await;
 

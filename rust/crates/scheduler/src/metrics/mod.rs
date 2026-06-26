@@ -235,6 +235,52 @@ lazy_static! {
         "Times remove_host_best gave up after exhausting its inner retry budget"
     )
     .expect("Failed to register placement_inner_retries_exhausted_total counter");
+
+    // Booked-counter drift erased by the most recent delta reconcile. The reconcile
+    // applies `truth(proc) - redis` per key, so these sample how far the Redis
+    // counters had drifted from ground truth since the previous cycle.
+    //
+    // Diagnostic intent (this is the metric that would have caught the incident
+    // days early):
+    //   - NET is the signed core drift summed across keys. Persistently NEGATIVE =
+    //     Redis counters run HIGH (the wedge direction: jobs look at-cap when they
+    //     are not),  the symptom of lost Cuebot release decrements accumulating.
+    //   - ABS is the sum of |core delta|, i.e. total drift magnitude regardless of
+    //     sign. A steady baseline is healthy churn; sustained growth means a drift
+    //     source is widening or the reconcile is falling behind.
+    //   - KEYS is how many counters needed a non-zero correction.
+    // A healthy steady state is small NET (near zero, slight positive from the
+    // read-order bias) and a flat ABS. Watch NET going large-negative.
+    pub static ref RECONCILE_NET_CORE_DRIFT: Gauge = register_gauge!(
+        "scheduler_reconcile_net_core_drift",
+        "Signed sum of (proc_truth - redis) core corrections in the last reconcile \
+         (negative = Redis counters biased high, the wedge direction)"
+    )
+    .expect("Failed to register reconcile_net_core_drift gauge");
+
+    pub static ref RECONCILE_ABS_CORE_DRIFT: Gauge = register_gauge!(
+        "scheduler_reconcile_abs_core_drift",
+        "Sum of |core correction| applied in the last reconcile (total drift magnitude erased)"
+    )
+    .expect("Failed to register reconcile_abs_core_drift gauge");
+
+    pub static ref RECONCILE_KEYS_CORRECTED: Gauge = register_gauge!(
+        "scheduler_reconcile_keys_corrected",
+        "Number of booked counters that needed a non-zero core correction in the last reconcile"
+    )
+    .expect("Failed to register reconcile_keys_corrected gauge");
+
+    // Incremented when a reconcile cycle fails before it could apply (and sample)
+    // its corrections,  a PG snapshot/baseline query error or a Redis read/apply
+    // failure. The drift gauges above are LAST-WRITE-WINS and only update on a
+    // successful cycle, so during an outage they would otherwise sit at a stale,
+    // possibly-healthy value. Alert on `rate(...) > 0` alongside the gauges so a
+    // run of failures isn't mistaken for "no drift".
+    pub static ref RECONCILE_FAILURES_TOTAL: Counter = register_counter!(
+        "scheduler_reconcile_failures_total",
+        "Reconcile cycles that failed before applying/sampling corrections (drift gauges are stale)"
+    )
+    .expect("Failed to register reconcile_failures_total counter");
 }
 
 /// Process-wide monotonic count of frames dispatched this session. Mirrors the
@@ -413,6 +459,24 @@ pub fn set_clusters_active(count: i64) {
 #[inline]
 pub fn set_active_tags(count: i64) {
     ACTIVE_TAGS.set(count as f64);
+}
+
+/// Records the drift erased by one delta-reconcile cycle: `net_core_drift` is the
+/// signed sum of `(proc_truth - redis)` core corrections (negative = Redis ran
+/// high), `abs_core_drift` is the sum of their magnitudes, and `keys_corrected` is
+/// the count of counters that needed a non-zero correction.
+#[inline]
+pub fn set_reconcile_drift(net_core_drift: i64, abs_core_drift: i64, keys_corrected: i64) {
+    RECONCILE_NET_CORE_DRIFT.set(net_core_drift as f64);
+    RECONCILE_ABS_CORE_DRIFT.set(abs_core_drift as f64);
+    RECONCILE_KEYS_CORRECTED.set(keys_corrected as f64);
+}
+
+/// Counts a reconcile cycle that failed before applying/sampling its corrections,
+/// so a stale (last-write-wins) drift gauge during an outage is still detectable.
+#[inline]
+pub fn increment_reconcile_failure() {
+    RECONCILE_FAILURES_TOTAL.inc();
 }
 
 /// Observes the duration of one awake-gate scan query.
