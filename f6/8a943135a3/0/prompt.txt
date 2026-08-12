@@ -1,0 +1,6 @@
+I'm having this exception when running @cuebot/src/main/java/com/imageworks/spcue/dispatcher/Scheduler.java in prod:
+
+[SELECT show_name, job_name, pk_job, pk_show, pk_facility, str_name, str_shot, str_user, int_uid, str_log_dir, COALESCE(str_os, '') AS str_os, COALESCE(str_loki_url, '') AS str_loki_url, frame_name, frame_state, pk_frame, pk_layer, int_retries, int_version, layer_name, layer_type, b_threadable, int_cores_min, int_cores_max, int_mem_min, int_gpus_min, int_gpus_max, int_gpu_mem_min, str_cmd, str_range, int_chunk_size, str_services FROM (SELECT ROW_NUMBER() OVER ( ORDER BY frame.int_dispatch_order ASC, frame.int_layer_order ASC ) AS LINENUM, job.str_show AS show_name, job.str_name AS job_name, job.pk_job, job.pk_show, job.pk_facility, job.str_name, job.str_shot, job.str_user, job.int_uid, job.str_log_dir, job.str_os, job.str_loki_url, frame.str_name AS frame_name, frame.str_state AS frame_state, f...
+Hint: For example, FROM (SELECT ...) [AS] foo 
+
+Help me to identify the sql issue

@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "f68a943135a3",
+  "session_id": "1e1405ca-5e84-42fb-9c38-05fefe42df91",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-12T15:53:24.897765Z",
+  "branch": "planner-scheduler-and-simulator",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/DispatchQuery.java"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "66ce7cbd115d",
+  "token_usage": {
+    "input_tokens": 135,
+    "cache_creation_tokens": 35698,
+    "cache_read_tokens": 619535,
+    "output_tokens": 6587,
+    "api_call_count": 13
+  },
+  "summary": {
+    "intent": "Diagnose a Postgres exception thrown by cuebot's Scheduler in production, tracing it back to a malformed SQL query in the dispatcher DAO layer.",
+    "outcome": "Identified and fixed two missing derived-table aliases and one incorrect column reference in DispatchQuery.java, then verified the fix compiled and passed formatting checks; flagged a related operator-precedence bug in the limit-check predicate as a separate, deferred issue.",
+    "learnings": {
+      "repo": [
+        "Postgres requires an alias on derived tables in FROM clauses (`) AS t1`); DispatchQuery.java's other query variants all follow this pattern, making the two missing-alias constants stand out as outliers.",
+        "The `job` table has no `pk_layer` column (per V1__Initial_schema.sql); layer filtering must reference `layer.pk_layer`, not `job.pk_layer`.",
+        "DispatchQuery.java's SQL constants have been broken since before the #2297 reformat, meaning the layer-targeted, non-local dispatch path (`findNextDispatchFrames(layer, host)` / `(layer, proc)`) has never functioned correctly in production."
+      ],
+      "code": [
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/DispatchQuery.java",
+          "line": 1075,
+          "finding": "FIND_DISPATCH_FRAME_BY_LAYER_AND_HOST derived subquery closed with `) WHERE LINENUM \u003c= ?` instead of `) AS t1 WHERE LINENUM \u003c= ?`, causing Postgres error 42601 (subquery in FROM must have an alias) — this was the exact prod exception reported."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/DispatchQuery.java",
+          "line": 982,
+          "finding": "FIND_DISPATCH_FRAME_BY_LAYER_AND_PROC has the same missing derived-table alias bug as line 1075."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/DispatchQuery.java",
+          "line": 957,
+          "finding": "FIND_DISPATCH_FRAME_BY_LAYER_AND_PROC filters on `job.pk_layer=?`, but `job` has no such column; should be `layer.pk_layer=?` as in the HOST variant at line 1049. Would surface as error 42703 once the alias bug is fixed."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/DispatcherDaoJdbc.java",
+          "line": 416,
+          "finding": "findNextDispatchFrames callers (lines 416 and 444) invoke the broken layer-targeted query constants, explaining why the bug only manifests in specific booking flows rather than the job-targeted dispatch path."
+        }
+      ],
+      "workflow": [
+        "Traced a runtime SQL exception to source by grepping for the distinctive `LINENUM`/`ROW_NUMBER` markers from the error message, then reading the DAO and caller files and using git blame to date the bug.",
+        "Verified the fix by re-checking all query constants for consistent aliasing, then running compile + spotlessJavaCheck (JDK 11) before declaring done."
+      ]
+    },
+    "friction": [
+      "Prod stack trace/query text was truncated, requiring source inspection to fully identify which of several similar query constants was implicated."
+    ],
+    "open_items": [
+      "Unparenthesized `WHERE l.pk_layer = ? AND sum_running.int_sum_running \u003c limit_record.int_max_value OR sum_running.int_sum_running IS NULL` predicate in both LAYER_AND_HOST and LAYER_AND_PROC queries (and the same unparenthesized shape in job-targeted queries) causes OR to bind looser than AND, letting layers without a limit record bypass the max-running-frame limit entirely — left unfixed since it's a behavior change across the dispatcher, recommended as its own change."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-12T15:53:08.786414Z",
+    "agent_lines": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 100
+  }
+}
