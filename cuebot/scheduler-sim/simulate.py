@@ -405,6 +405,7 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "inject_license.py", "license_watch.py", "fake_license.py",
                      "inject_capdrop.py", "capdrop_watch.py",
                      "inject_prodenv.py", "prodenv_watch.py",
+                     "inject_layercap.py", "layercap_watch.py",
                      "live_stats.py",
                      "gen_jobs.py", "drain_test.py", "metrics.py", "stats.py",
                      "status_pinger", "db_sampler.py", "util_sampler.py"]
@@ -785,6 +786,8 @@ def start_cuebot(mode, reservations=False, block_seconds=60, max_fraction=0.5,
         # Locality bonus toggle, so the LOCALITY scenario can be calibrated
         # against a bonus-off control run (SIM_LOCALITY_ENABLED=false).
         "SCHEDULER_LOCALITY_ENABLED": os.environ.get("SIM_LOCALITY_ENABLED", "true"),
+        # Per-host layer cap fraction (0 = off). LAYERCAP turns it on.
+        "SCHEDULER_LAYER_HOST_MAX_FRAC": os.environ.get("SIM_LAYER_HOST_MAX_FRAC", "0.25"),
         # Periodic "Scheduler stat:" summary (carries backfilled=N) fires every
         # this many seconds -- lowered from the 300s default so the live tail's
         # bf[] backfill counter updates often (override with SIM_STAT_INTERVAL_SECONDS).
@@ -877,6 +880,7 @@ def start_extra_cuebot(instance, mode, reservations=False, block_seconds=60,
         "SCHEDULER_RESERVATION_MAX_FRACTION": str(max_fraction),
         "SCHEDULER_RESERVATION_MAX_GRANTEES": str(max_grantees),
         "SCHEDULER_BACKFILL_ENABLED": "true" if backfill else "false",
+        "SCHEDULER_LAYER_HOST_MAX_FRAC": os.environ.get("SIM_LAYER_HOST_MAX_FRAC", "0.25"),
         "SCHEDULER_STAT_INTERVAL_SECONDS": os.environ.get("SIM_STAT_INTERVAL_SECONDS", "30"),
         # Offset every listener so the extra never collides with instance 0.
         "CUEBOT_GRPC_CUE_PORT": str(cue),
@@ -1131,6 +1135,12 @@ def start_prodenv_injector(duration):
     log(f"starting PRODENV stream (limited + tagged 1-core layers across all "
         f"shows; the watcher fires chaotic admin mutations, for {duration}s) ...")
     spawn(["inject_prodenv.py", str(duration)], f"{FARM}/inject_prodenv.log")
+
+
+def start_layercap_injector(duration):
+    log(f"starting LAYERCAP flood (one deep 1-core layer; the cap must stop it "
+        f"from blanketing any host, for {duration}s) ...")
+    spawn(["inject_layercap.py", str(duration)], f"{FARM}/inject_layercap.log")
 
 
 def start_license_server(duration):
@@ -1476,6 +1486,20 @@ def _verify_check(name, gdir, logp, cblog):
                     f"{sm2.group(1) if sm2 else '?'}cp streak "
                     f"{sm2.group(2) if sm2 else '?'}; flush rejections {warns}; "
                     f"tick fails {ticks}; waitlist limit peak {wl['limit']}")
+    if name == "LAYERCAP":
+        # The watcher's verdict is the whole check: no host over its per-layer
+        # share, and the flood spread across several hosts.
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        pm = re.search(r"peak running (\d+) frames across (\d+) hosts", txt)
+        vm = re.search(r"cap violations (\d+)", txt)
+        ok = bool(re.search(r"(?m)^PASS:", txt))
+        return ok, (f"one-layer flood vs per-host cap: peak "
+                    f"{pm.group(1) if pm else '?'} frames on "
+                    f"{pm.group(2) if pm else '?'} hosts, cap violations "
+                    f"{vm.group(1) if vm else '?'}")
     if name == "CAPDROP":
         # The watcher's own verdict (mirror tracked procs after the cap drop),
         # plus: the wedge signature must be absent from the cuebot log. One
@@ -1745,6 +1769,15 @@ def run_verify():
         # either cap; a correct scheduler must keep each accounting mirror equal
         # to the procs anyway (no wedge, no negative drift).
         ("CAPDROP", ["--hosts", "3,4,10", "--capdrop-test", str(D)]),
+        # LAYERCAP: one deep 1-core layer floods a small farm with the per-host
+        # layer cap on (25% of a host's cores per layer, floor 8 frames). No
+        # host may hold more than its share; the flood must spill across hosts
+        # instead of blanketing one machine (the production 128-on-one pile-up).
+        # --compress 30: long frames, so the flood's concurrency accumulates far
+        # past every cap instead of draining as fast as it books.
+        ("LAYERCAP", ["--hosts", "3,4,10", "--compress", "30",
+                      "--layercap-test", str(D)],
+         {"SIM_LAYER_HOST_MAX_FRAC": "0.25"}),
         # LICENSE: live application licenses (hengine host-based, katana + maya
         # floating) served by a fake license server that counts the farm's own
         # usage AND artist holds, the way a real one does. Same small farm as the
@@ -2041,6 +2074,11 @@ def main():
                          "accounting mirror (job_resource.int_cores) keeps "
                          "tracking SUM(procs) instead of wedging on the legacy "
                          "verify trigger.")
+    ap.add_argument("--layercap-test", type=int, default=0, metavar="SECS",
+                    help="LAYERCAP test: flood one deep 1-core layer and assert "
+                         "no host ever holds more than the per-host layer cap "
+                         "(scheduler.layer_host_max_frac of its cores, floor 8 "
+                         "frames), so one layer cannot blanket a machine.")
     ap.add_argument("--prodenv-test", type=int, default=0, metavar="SECS",
                     help="PRODENV chaos soak: fire continuous random admin "
                          "mutations (limit caps, live capped folders, host "
@@ -2391,6 +2429,8 @@ def main():
         start_capdrop_injector(args.capdrop_test)
     if args.prodenv_test:
         start_prodenv_injector(args.prodenv_test)
+    if args.layercap_test:
+        start_layercap_injector(args.layercap_test)
     if lic_secs:
         start_license_injector(lic_secs)
     if args.folder_test:
@@ -2414,7 +2454,7 @@ def main():
     # is active, so a run can be watched without querying the DB by hand.
     watch = (args.strand or args.priority_starve or args.priority_spread
              or args.limit_test or args.license_test or args.poison_test
-             or args.capdrop_test or args.prodenv_test
+             or args.capdrop_test or args.prodenv_test or args.layercap_test
              or args.folder_test or args.locality_test
              or args.depend_test or args.failover_test or args.tag_gpu_test
              or args.tagmax_test
@@ -2443,6 +2483,11 @@ def main():
         log(f"watching PRODENV (chaotic admin mutations vs accounting truth) "
             f"for {args.prodenv_test}s ...")
         subprocess.run([VENV_PY, "prodenv_watch.py", str(args.prodenv_test), "2.5"],
+                       cwd=FARM)
+    elif args.layercap_test:
+        log(f"watching LAYERCAP (one-layer flood vs the per-host layer cap) "
+            f"for {args.layercap_test}s ...")
+        subprocess.run([VENV_PY, "layercap_watch.py", str(args.layercap_test), "3"],
                        cwd=FARM)
     elif args.capdrop_test:
         log(f"watching CAPDROP (accounting mirror vs procs after a cap drop) "

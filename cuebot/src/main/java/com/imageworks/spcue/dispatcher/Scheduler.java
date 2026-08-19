@@ -98,6 +98,12 @@ public class Scheduler extends JdbcDaoSupport {
     // host -> booking odometer, incremented per frame booked on the host.
     private final Map<String, Long> bookingsByHost = new HashMap<String, Long>();
 
+    // Per-host same-layer cap: one layer may hold at most this fraction of a host's cores,
+    // never below 8 frames so small hosts still anchor a cache-warm batch. 0 disables;
+    // default 0.25. Bounds the blast radius and the phase-locked IO of a hundred identical
+    // frames blanketing one machine, at the price of nibbling more hosts per flood.
+    private volatile double layerHostMaxFrac = 0.25;
+
     // Seat bonus for host-based licenses (one checkout per machine): subtracted per seated pool so
     // placement packs licensed work onto the fewest hosts. Sized above the E-PVM spread. See doc.
     private volatile double licenseSeatBonus = 16.0;
@@ -200,6 +206,9 @@ public class Scheduler extends JdbcDaoSupport {
 
     // host -> layer ids it currently runs, the locality/affinity signal. Read fresh each tick.
     private Map<String, Set<String>> hostLayerAffinity = new HashMap<>();
+    // Frames each layer runs per host right now ("hostId|layerId" -> count), read with the
+    // affinity snapshot and advanced as the plan books. Backs the per-host layer cap.
+    private Map<String, Integer> hostLayerFrames = new HashMap<>();
 
     // Layer-placements planned this tick, for the tick-breakdown log line.
     private int lastPlacements;
@@ -349,6 +358,7 @@ public class Scheduler extends JdbcDaoSupport {
         localityBonus = env.getProperty("scheduler.locality_bonus", Double.class, 8.0);
         localityWindowFrames =
                 env.getProperty("scheduler.locality_window_frames", Integer.class, 64);
+        layerHostMaxFrac = env.getProperty("scheduler.layer_host_max_frac", Double.class, 0.25);
         // Property name kept from the per-host-limit feature this supersedes, so
         // any site already setting it keeps its value.
         licenseSeatBonus = env.getProperty("scheduler.host_limit_seat_bonus", Double.class, 16.0);
@@ -1586,14 +1596,30 @@ public class Scheduler extends JdbcDaoSupport {
      */
     private Map<String, Set<String>> readHostLayerAffinity() {
         Map<String, Set<String>> affinity = new HashMap<>();
-        if (!localityEnabled)
+        Map<String, Integer> counts = new HashMap<>();
+        hostLayerFrames = counts;
+        if (!localityEnabled && layerHostMaxFrac <= 0)
             return affinity;
-        getJdbcTemplate().query("SELECT pk_host, pk_layer FROM proc WHERE pk_layer IS NOT NULL",
-                rs -> {
-                    affinity.computeIfAbsent(rs.getString("pk_host"), k -> new HashSet<>())
-                            .add(rs.getString("pk_layer"));
+        getJdbcTemplate().query("SELECT pk_host, pk_layer, COUNT(*) AS n FROM proc "
+                + "WHERE pk_layer IS NOT NULL GROUP BY pk_host, pk_layer", rs -> {
+                    String host = rs.getString("pk_host");
+                    String layer = rs.getString("pk_layer");
+                    affinity.computeIfAbsent(host, k -> new HashSet<>()).add(layer);
+                    counts.put(host + "|" + layer, rs.getInt("n"));
                 });
         return affinity;
+    }
+
+    /**
+     * Most frames of candidate c one host may hold when the per-host layer cap is on: the
+     * configured fraction of the host's cores, never below 8 frames so small hosts still anchor a
+     * cache-warm batch. Uncapped when the knob is 0 or the layer reserves no cores.
+     */
+    private int layerHostCap(BookableHost h, LayerCandidate c) {
+        if (layerHostMaxFrac <= 0 || c.layerCoresMin <= 0)
+            return Integer.MAX_VALUE;
+        int byFrac = (int) ((layerHostMaxFrac * h.coresTotal) / c.layerCoresMin);
+        return Math.max(8, byFrac);
     }
 
     // Max pending layers the "why nothing books" explain logs per group, highest priority first.
@@ -1967,6 +1993,12 @@ public class Scheduler extends JdbcDaoSupport {
                         if (!backfillAllows(h, c, tReadyByHost))
                             continue;
                     }
+                    // Per-host layer cap: a host already holding its share of
+                    // this layer takes no more of it; the flood spills to the
+                    // next host instead of blanketing this one.
+                    if (layerHostMaxFrac > 0 && hostLayerFrames
+                            .getOrDefault(h.hostId + "|" + c.layerId, 0) >= layerHostCap(h, c))
+                        continue;
                     double score = placementScore(h, c);
                     // Locality bonus: prefer a host already running this layer so
                     // a freed core is refilled by the same layer (same-machine
@@ -2055,6 +2087,19 @@ public class Scheduler extends JdbcDaoSupport {
                     if (estFrames > maxByFolder)
                         estFrames = maxByFolder;
                 }
+                // Cap the commit to the host's remaining share of this layer.
+                // The selection gate keeps hosts already at cap out, so the
+                // remainder here is always positive.
+                if (layerHostMaxFrac > 0) {
+                    int hlCap = layerHostCap(best, c);
+                    if (hlCap != Integer.MAX_VALUE) {
+                        int hlHave = hostLayerFrames.getOrDefault(best.hostId + "|" + c.layerId, 0);
+                        if (estFrames > hlCap - hlHave)
+                            estFrames = hlCap - hlHave;
+                        if (estFrames <= 0)
+                            break;
+                    }
+                }
 
                 int estCores = estFrames * c.layerCoresMin;
                 long estMem = (long) estFrames * c.layerMemMin;
@@ -2072,6 +2117,8 @@ public class Scheduler extends JdbcDaoSupport {
                 // tick see the updated usage.
                 jobCoresUsed.put(c.jobId, c.jobCoresInUse);
                 showCoresUsed.put(c.showId, c.showCoresInUse);
+                if (layerHostMaxFrac > 0)
+                    hostLayerFrames.merge(best.hostId + "|" + c.layerId, estFrames, Integer::sum);
                 if (c.limitId != null)
                     limitUsed.merge(c.limitId, estFrames, Integer::sum);
                 if (c.folderMax >= 0)
