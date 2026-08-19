@@ -403,6 +403,8 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "priority_spread_watch.py", "inject_limit.py",
                      "limit_watch.py", "inject_folder.py", "folder_watch.py",
                      "inject_license.py", "license_watch.py", "fake_license.py",
+                     "inject_capdrop.py", "capdrop_watch.py",
+                     "inject_prodenv.py", "prodenv_watch.py",
                      "live_stats.py",
                      "gen_jobs.py", "drain_test.py", "metrics.py", "stats.py",
                      "status_pinger", "db_sampler.py", "util_sampler.py"]
@@ -602,9 +604,10 @@ def ensure_postgres():
 
 
 # ---------------------------------------------------------------- reset
-# Wipe every sim show's work (base 'sim' plus sim1..sim5), matched by name so the
+# Wipe every sim show's work (base 'sim' plus showA..showE), matched by name so the
 # multi-show feeder's jobs are all cleared between runs.
-_SIM_SHOWS = "(SELECT pk_show FROM show WHERE str_name LIKE 'sim%')"
+_SIM_SHOWS = ("(SELECT pk_show FROM show "
+              "WHERE str_name LIKE 'sim%' OR str_name LIKE 'show%')")
 RESET_SQL = (
     "DELETE FROM proc;"
     f" DELETE FROM frame f USING job j WHERE f.pk_job=j.pk_job AND j.pk_show IN {_SIM_SHOWS};"
@@ -645,7 +648,7 @@ def reset_db(wipe_hosts=True):
     chk = psql(
         f"SELECT (SELECT count(*) FROM proc), "
         f"(SELECT count(*) FROM frame f JOIN job j ON j.pk_job=f.pk_job "
-        f"JOIN show s ON s.pk_show=j.pk_show WHERE s.str_name LIKE 'sim%'), "
+        f"JOIN show s ON s.pk_show=j.pk_show WHERE s.str_name LIKE 'sim%' OR s.str_name LIKE 'show%'), "
         f"(SELECT count(*) FROM host);")
     procs, frames, hosts = chk.stdout.strip().split("|")
     log(f"  procs={procs} simFrames={frames} hosts={hosts}")
@@ -1124,6 +1127,12 @@ def start_capdrop_injector(duration):
     spawn(["inject_capdrop.py", str(duration)], f"{FARM}/inject_capdrop.log")
 
 
+def start_prodenv_injector(duration):
+    log(f"starting PRODENV stream (limited + tagged 1-core layers across all "
+        f"shows; the watcher fires chaotic admin mutations, for {duration}s) ...")
+    spawn(["inject_prodenv.py", str(duration)], f"{FARM}/inject_prodenv.log")
+
+
 def start_license_server(duration):
     """Bring up the fake license server BEFORE cuebot polls it, so the planner's
     first sample is real rather than a failed fetch."""
@@ -1180,9 +1189,10 @@ def set_scheduler_managed(managed):
     false restores it to cuebot, so a later --mode new/old run is never left
     stranded by a previous --mode rust run."""
     val = "true" if managed else "false"
-    # All sim shows (the base 'sim' plus sim1..sim5) get the same flag, so a
+    # All sim shows (the base 'sim' plus showA..showE) get the same flag, so a
     # multi-show run hands every show to the same scheduler.
-    psql(f"UPDATE show SET b_scheduler_managed={val} WHERE str_name LIKE 'sim%';")
+    psql(f"UPDATE show SET b_scheduler_managed={val} "
+         f"WHERE str_name LIKE 'sim%' OR str_name LIKE 'show%';")
     log(f"  show b_scheduler_managed={val}")
 
 
@@ -1440,6 +1450,32 @@ def _verify_check(name, gdir, logp, cblog):
         ok = bool(re.search(r"(?m)^PASS:", txt)) and wl["limit"] > 0
         return ok, (f"peak concurrent running {peak} vs cap {cap}; "
                     f"waitlist limit peak {wl['limit']}")
+    if name == "PRODENV":
+        # The watcher's own verdict (mirrors tracked, caps decayed, coverage
+        # floors met), plus the wedge signatures must be absent from the cuebot
+        # log and the waitlist must have classified a limit-bound backlog at
+        # least once (proves the chaos actually bit).
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        am = re.search(r"chaos actions=(\d+)", txt)
+        jm = re.search(r"job worst gap (\d+)cp streak (\d+)", txt)
+        sm2 = re.search(r"sub worst gap (\d+)cp streak (\d+)", txt)
+        warns = (cb.count("job/folder/point delta flush failed")
+                 + cb.count("subscription delta flush failed")
+                 + cb.count("layer_resource delta flush failed"))
+        ticks = cb.count("Scheduler tick failed")
+        wl = wl_peaks()
+        ok = (bool(re.search(r"(?m)^PASS:", txt)) and warns == 0
+              and ticks <= 2 and wl["limit"] > 0)
+        return ok, (f"{am.group(1) if am else '?'} chaotic admin mutations; "
+                    f"job mirror worst gap "
+                    f"{jm.group(1) if jm else '?'}cp streak "
+                    f"{jm.group(2) if jm else '?'}, sub worst gap "
+                    f"{sm2.group(1) if sm2 else '?'}cp streak "
+                    f"{sm2.group(2) if sm2 else '?'}; flush rejections {warns}; "
+                    f"tick fails {ticks}; waitlist limit peak {wl['limit']}")
     if name == "CAPDROP":
         # The watcher's own verdict (mirror tracked procs after the cap drop),
         # plus: the wedge signature must be absent from the cuebot log. One
@@ -1657,6 +1693,16 @@ def run_verify():
     base = [VENV_PY, os.path.abspath(__file__), "--mode", "new", "--compress", "8"]
     cblog = "/tmp/cuebot-new.log"   # every scenario runs --mode new
     scenarios = [
+        # PRODENV: the broad gate, always first. A chaotic production
+        # environment on the FULL farm for a fixed 300s: limit caps churn,
+        # folders appear live with caps and eat running jobs, host tags come
+        # and go, job max cores and subscription bursts random-walk, hosts
+        # lock and unlock -- all while the feeder keeps the farm saturated.
+        # The watcher asserts decay-style cap invariants, mirror-vs-proc truth
+        # everywhere, zero rejected flushes and zero negative counters. If
+        # PRODENV fails, the focused scenarios below localize the cause.
+        ("PRODENV", ["--tags", "8", "--feed", "330", "--prodenv-test", "300"],
+         {"SIM_TAG_SKEW": "1.0"}),
         ("OOM", ["--feed", str(D), "--mem-failure-rate", "0.1"]),
         # PRIORITY: 10 priority classes contend; share of completions must rise
         # with priority (Spearman rho). Run on a SMALL farm (~10% = 5760 cores) so
@@ -1801,8 +1847,14 @@ def run_verify():
          {"SIM_GENERAL_FRAC": "0.3"}),
     ]
     results = []
+    # SIM_VERIFY_ONLY=NAME[,NAME...] runs a subset (rerun one scenario, or
+    # split a long battery across interrupted sessions).
+    only = {s.strip().upper() for s in
+            os.environ.get("SIM_VERIFY_ONLY", "").split(",") if s.strip()}
     for entry in scenarios:
         name, flags = entry[0], entry[1]
+        if only and name.upper() not in only:
+            continue
         env_extra = entry[2] if len(entry) > 2 else {}
         gdir = os.path.join("/tmp/scheduler-sim/verify", name.lower())
         logp = gdir + ".log"
@@ -1989,6 +2041,13 @@ def main():
                          "accounting mirror (job_resource.int_cores) keeps "
                          "tracking SUM(procs) instead of wedging on the legacy "
                          "verify trigger.")
+    ap.add_argument("--prodenv-test", type=int, default=0, metavar="SECS",
+                    help="PRODENV chaos soak: fire continuous random admin "
+                         "mutations (limit caps, live capped folders, host "
+                         "tags, job max cores, subscription bursts, host "
+                         "locks) at a loaded farm and assert every accounting "
+                         "mirror keeps tracking the procs, over-cap usage only "
+                         "decays, and no flush is ever rejected.")
     ap.add_argument("--limit-test", type=int, default=0, metavar="SECS",
                     help="LIMIT test: attach a global limit (SIM_LIMIT_NAME=simlic, "
                          "cap SIM_LIMIT_MAX=50) to a flood of frames and check the "
@@ -2330,6 +2389,8 @@ def main():
         start_limit_injector(args.limit_test)
     if args.capdrop_test:
         start_capdrop_injector(args.capdrop_test)
+    if args.prodenv_test:
+        start_prodenv_injector(args.prodenv_test)
     if lic_secs:
         start_license_injector(lic_secs)
     if args.folder_test:
@@ -2353,7 +2414,7 @@ def main():
     # is active, so a run can be watched without querying the DB by hand.
     watch = (args.strand or args.priority_starve or args.priority_spread
              or args.limit_test or args.license_test or args.poison_test
-             or args.capdrop_test
+             or args.capdrop_test or args.prodenv_test
              or args.folder_test or args.locality_test
              or args.depend_test or args.failover_test or args.tag_gpu_test
              or args.tagmax_test
@@ -2378,6 +2439,11 @@ def main():
         csv = f"{graph_dir}/run_priority_spread.csv" if graph_dir else ""
         subprocess.run([VENV_PY, "priority_spread_watch.py", str(args.priority_spread), "5"],
                        cwd=FARM, env=dict(os.environ, SIM_SPREAD_CSV=csv))
+    elif args.prodenv_test:
+        log(f"watching PRODENV (chaotic admin mutations vs accounting truth) "
+            f"for {args.prodenv_test}s ...")
+        subprocess.run([VENV_PY, "prodenv_watch.py", str(args.prodenv_test), "2.5"],
+                       cwd=FARM)
     elif args.capdrop_test:
         log(f"watching CAPDROP (accounting mirror vs procs after a cap drop) "
             f"for {args.capdrop_test}s ...")

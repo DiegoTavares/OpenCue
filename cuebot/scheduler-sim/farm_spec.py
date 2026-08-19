@@ -26,7 +26,7 @@ SHOW = "sim"
 # real structure and the priority-weighted lottery hands higher-priority shows a
 # bigger slice of a contended farm. Single-show scripts (the priority tests, etc.)
 # keep using SHOW above and are untouched.
-SHOWS = [s for s in os.environ.get("SIM_SHOWS", "sim1,sim2,sim3,sim4,sim5").split(",") if s]
+SHOWS = [s for s in os.environ.get("SIM_SHOWS", "showA,showB,showC,showD,showE").split(",") if s]
 
 
 def _spread(n, lo=10, hi=100):
@@ -36,7 +36,7 @@ def _spread(n, lo=10, hi=100):
     return [round(lo + (hi - lo) * i / (n - 1)) for i in range(n)]
 
 
-# {show: priority} -- e.g. sim1=10, sim2=32, sim3=55, sim4=78, sim5=100. Override
+# {show: priority} -- e.g. showA=10, showB=32, showC=55, showD=78, showE=100. Override
 # the even spread with SIM_SHOW_PRIS="10,30,50,...".
 _pris = os.environ.get("SIM_SHOW_PRIS")
 SHOW_PRIS = (dict(zip(SHOWS, [int(x) for x in _pris.split(",")])) if _pris

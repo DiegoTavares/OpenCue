@@ -43,7 +43,7 @@ DEP_MAX_BRANCH = int(os.environ.get("SIM_DEP_MAX_BRANCH", "3"))
 # somewhat above the cap (e.g. ~210k DEPEND on the full farm at 3x40k).
 PENDING_CAP = TARGET * 3
 
-# Multi-show feeder: spread submissions across spec.SHOWS (sim1..sim5), each with
+# Multi-show feeder: spread submissions across spec.SHOWS (showA..showE), each with
 # its own priority (spec.SHOW_PRIS, 10..100). The show is chosen per SUBMISSION so
 # a whole dependency tree stays in one show. Falls back to the single 'sim' show
 # when SIM_SHOWS is cleared, keeping the old single-show behaviour available.
