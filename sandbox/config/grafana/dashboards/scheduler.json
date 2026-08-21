@@ -530,6 +530,285 @@
           "refId": "C"
         }
       ]
+    },
+    {
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 2,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "options": {
+        "mode": "html",
+        "content": "<div style=\"background:#1f2733;border-left:4px solid #5794F2;padding:10px 16px;border-radius:3px;font-family:system-ui;font-size:20px;font-weight:700;letter-spacing:2px;color:#d8d9da\">FARM HEALTH</div>"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Swap in use, by hardware shape",
+      "description": "Of each hardware shape's swap space, the share in use, straight from the host reports (no database read). Healthy hosts sit near 0%. A shape above the red 20% line is out of memory: its frames slow down and die. The same family also has cue_farm_health_hosts_swapping (a machine count) for alerts.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "axisLabel": "% of swap spent",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (cue_farm_health_swap_used_frac{by=\"hwtype\"}) * 100",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Kernel time, by hardware shape",
+      "description": "How much CPU time each hardware shape spends inside the Linux kernel (system time). 'mean' is the shape's average; 'worst host' is its sickest machine. Under 10% is normal. Above the red 30% line a host mostly serves page faults, interrupts or I/O instead of rendering. Needs the RQD sysTime report attribute; without it the line reads 0.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "axisLabel": "% of CPU time in the kernel",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (cue_farm_health_system_time_pct{by=\"hwtype\"})",
+          "legendFormat": "{{name}} mean"
+        },
+        {
+          "expr": "max by (name) (cue_farm_health_system_time_pct_max{by=\"hwtype\"})",
+          "legendFormat": "{{name}} worst host"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Swap in use, by spec group",
+      "description": "The same swap story, cut by host-spec group (the scheduler's booking pools: tags plus OS, gpu marked). Tells you which pool of the farm is memory starved, so you know which kind of work is at risk.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "axisLabel": "% of swap spent",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 20
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (cue_farm_health_swap_used_frac{by=\"group\"}) * 100",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Kernel time, by spec group",
+      "description": "Mean kernel (system) CPU time per host-spec group. A pool above the red line holds sick machines; use the hardware-shape panel on the left row to find the worst host size.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never",
+            "axisLabel": "% of CPU time in the kernel",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (name) (cue_farm_health_system_time_pct{by=\"group\"})",
+          "legendFormat": "{{name}} mean"
+        },
+        {
+          "expr": "max by (name) (cue_farm_health_system_time_pct_max{by=\"group\"})",
+          "legendFormat": "{{name}} worst host"
+        }
+      ]
     }
   ]
 }

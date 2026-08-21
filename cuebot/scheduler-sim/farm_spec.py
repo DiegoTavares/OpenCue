@@ -69,6 +69,25 @@ def os_attrs():
     return {"SP_OS": HOST_OS} if HOST_OS else {}
 
 
+def health_profile(name):
+    """Synthetic host health for the fake farm. Hosts named *0001 are 'sick':
+    high kernel time and a quarter of their swap already spent; everyone else
+    hums at a low baseline. Deterministic, so scenarios can assert against it.
+    Returns (sys_time_pct, swap_total_kb, swap_free_kb)."""
+    total = 8 * GB_KB
+    if name.endswith("0001"):
+        return 45.0, total, total // 4
+    base = 2.0 + (int(hashlib.md5(("hp:" + name).encode()).hexdigest(), 16) % 40) / 10.0
+    return base, total, total
+
+
+def health_attrs(name):
+    """os_attrs plus the sysTime report attribute (kernel-time percent)."""
+    a = dict(os_attrs())
+    a["sysTime"] = f"{health_profile(name)[0]:.1f}"
+    return a
+
+
 def psql_cmd(tab=False):
     """psql argv for read-only queries. No sudo (runs as the current user);
     host/port/user/db come from SIM_* env so it matches simulate.py. tab=True

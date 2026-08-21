@@ -101,6 +101,28 @@ public class SchedulerMetrics {
             .help("Frames on procs right now, from the live booking/drain ledger")
             .labelNames("env", "cuebot_host").register();
 
+    // Farm health from the live report ledger, sliced two ways: by='group' is the
+    // host-spec group (normalized tags|os), by='hwtype' the hardware shape (e.g.
+    // 128c/112g). Swap is a fraction of capacity so it reads as a percent; a host
+    // counts as swapping above 5% of its swap in use. Kernel time comes from the
+    // report attribute sysTime and reads 0 where agents do not send it.
+    private static final Gauge farmSwapFrac = Gauge.build().name("cue_farm_health_swap_used_frac")
+            .help("Swap in use as a fraction of swap capacity across the label's hosts; "
+                    + "by='group' slices by host-spec group, by='hwtype' by hardware shape")
+            .labelNames("env", "cuebot_host", "by", "name").register();
+    private static final Gauge farmHostsSwapping =
+            Gauge.build().name("cue_farm_health_hosts_swapping")
+                    .help("Hosts with more than 5% of their swap in use, per slice")
+                    .labelNames("env", "cuebot_host", "by", "name").register();
+    private static final Gauge farmSysTime = Gauge.build().name("cue_farm_health_system_time_pct")
+            .help("Mean percent of CPU spent in the kernel across the slice's reporting "
+                    + "hosts (report attribute sysTime; 0 when agents do not send it)")
+            .labelNames("env", "cuebot_host", "by", "name").register();
+    private static final Gauge farmSysTimeMax =
+            Gauge.build().name("cue_farm_health_system_time_pct_max")
+                    .help("Worst single host's kernel-time percent in the slice")
+                    .labelNames("env", "cuebot_host", "by", "name").register();
+
     private static final String[] WAIT_REASONS =
             {"flowing", "capacity", "no fit", "limit", "no license", "held"};
     private static final Gauge waitingFrames = Gauge.build().name("cue_scheduler_waiting_frames")
@@ -119,6 +141,9 @@ public class SchedulerMetrics {
     // Shows published last tick, so a show that drops to zero procs gets set to 0
     // this tick rather than pinning its last value.
     private final Set<String> lastShows = new HashSet<>();
+    // Health slices published last tick ("by|name"), zeroed when absent for the
+    // same reason.
+    private final Set<String> lastHealth = new HashSet<>();
 
     @Autowired
     public SchedulerMetrics(Environment springEnv) {
@@ -181,9 +206,40 @@ public class SchedulerMetrics {
             for (String reason : WAIT_REASONS)
                 waitingFrames.labels(env, host, reason)
                         .set(s.waitingFramesByReason.getOrDefault(reason, 0L));
+            publishHealth(s);
         } catch (RuntimeException e) {
             logger.warn("recordTick failed: " + e.getMessage());
         }
+    }
+
+    /** SET the four health gauges per slice, zeroing slices that vanished. */
+    private void publishHealth(TickStats s) {
+        Set<String> seen = new HashSet<>();
+        for (String by : new String[] {"group", "hwtype"}) {
+            Map<String, HealthAgg> slice = by.equals("group") ? s.healthByGroup : s.healthByHwtype;
+            for (Map.Entry<String, HealthAgg> e : slice.entrySet()) {
+                HealthAgg a = e.getValue();
+                String name = e.getKey();
+                farmSwapFrac.labels(env, host, by, name)
+                        .set(a.swapTotalKb > 0 ? (double) a.swapUsedKb / a.swapTotalKb : 0.0);
+                farmHostsSwapping.labels(env, host, by, name).set(a.hostsSwapping);
+                farmSysTime.labels(env, host, by, name).set(a.sysN > 0 ? a.sysSum / a.sysN : 0.0);
+                farmSysTimeMax.labels(env, host, by, name).set(a.sysMax);
+                seen.add(by + "|" + name);
+            }
+        }
+        for (String prev : lastHealth) {
+            if (seen.contains(prev))
+                continue;
+            int cut = prev.indexOf('|');
+            String by = prev.substring(0, cut), name = prev.substring(cut + 1);
+            farmSwapFrac.labels(env, host, by, name).set(0.0);
+            farmHostsSwapping.labels(env, host, by, name).set(0.0);
+            farmSysTime.labels(env, host, by, name).set(0.0);
+            farmSysTimeMax.labels(env, host, by, name).set(0.0);
+        }
+        lastHealth.clear();
+        lastHealth.addAll(seen);
     }
 
     private void incReason(String reason, int count) {
@@ -207,5 +263,35 @@ public class SchedulerMetrics {
         public final Map<String, Double> coresByShow = new HashMap<>();
         public final Map<String, Integer> framesByShow = new HashMap<>();
         public final Map<String, Long> waitingFramesByReason = new HashMap<>();
+        public final Map<String, HealthAgg> healthByGroup = new HashMap<>();
+        public final Map<String, HealthAgg> healthByHwtype = new HashMap<>();
+    }
+
+    /**
+     * Swap and kernel-time aggregate over one health slice's hosts. Kernel time is fed only by
+     * hosts whose reports carry it; a host counts as swapping above 5% of its swap in use.
+     */
+    public static final class HealthAgg {
+        public long swapTotalKb;
+        public long swapUsedKb;
+        public int hostsSwapping;
+        public int hosts;
+        public double sysSum;
+        public double sysMax;
+        public int sysN;
+
+        public void add(long swapTotal, long swapFree, double sysTimePct) {
+            hosts++;
+            long used = Math.max(0, swapTotal - swapFree);
+            swapTotalKb += swapTotal;
+            swapUsedKb += used;
+            if (swapTotal > 0 && used > swapTotal / 20)
+                hostsSwapping++;
+            if (sysTimePct >= 0) {
+                sysSum += sysTimePct;
+                sysMax = Math.max(sysMax, sysTimePct);
+                sysN++;
+            }
+        }
     }
 }

@@ -406,6 +406,7 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "inject_capdrop.py", "capdrop_watch.py",
                      "inject_prodenv.py", "prodenv_watch.py",
                      "inject_layercap.py", "layercap_watch.py",
+                     "health_watch.py",
                      "live_stats.py",
                      "gen_jobs.py", "drain_test.py", "metrics.py", "stats.py",
                      "status_pinger", "db_sampler.py", "util_sampler.py"]
@@ -1500,6 +1501,22 @@ def _verify_check(name, gdir, logp, cblog):
                     f"{pm.group(1) if pm else '?'} frames on "
                     f"{pm.group(2) if pm else '?'} hosts, cap violations "
                     f"{vm.group(1) if vm else '?'}")
+    if name == "HEALTH":
+        # The watcher's verdict is the whole check: every hardware shape
+        # reports the planted sickness on the metrics endpoint, and the
+        # spec-group slices carry it too.
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        hm = re.search(r"hwtypes=(\d+) groups=(\d+)", txt)
+        sm3 = re.search(r"worst sysTime max=([0-9.]+)", txt)
+        ok = bool(re.search(r"(?m)^PASS:", txt))
+        return ok, (f"farm health on /metrics: "
+                    f"{hm.group(1) if hm else '?'} hardware shapes and "
+                    f"{hm.group(2) if hm else '?'} spec groups report swap, "
+                    f"worst kernel time "
+                    f"{sm3.group(1) if sm3 else '?'}%")
     if name == "CAPDROP":
         # The watcher's own verdict (mirror tracked procs after the cap drop),
         # plus: the wedge signature must be absent from the cuebot log. One
@@ -1778,6 +1795,13 @@ def run_verify():
         ("LAYERCAP", ["--hosts", "3,4,10", "--compress", "30",
                       "--layercap-test", str(D)],
          {"SIM_LAYER_HOST_MAX_FRAC": "0.25"}),
+        # HEALTH: the farm-health Prometheus family. The fake farm's pingers
+        # report a deterministic sickness (every *0001 host: kernel time 45%,
+        # a quarter of its swap spent); the cue_farm_health_* gauges must
+        # surface it per hardware shape and per host-spec group, fed by the
+        # host reports alone (no DB read). The feeder is just background load.
+        ("HEALTH", ["--hosts", "3,4,10", "--feed", str(D),
+                    "--health-test", str(D)]),
         # LICENSE: live application licenses (hengine host-based, katana + maya
         # floating) served by a fake license server that counts the farm's own
         # usage AND artist holds, the way a real one does. Same small farm as the
@@ -2079,6 +2103,12 @@ def main():
                          "no host ever holds more than the per-host layer cap "
                          "(scheduler.layer_host_max_frac of its cores, floor 8 "
                          "frames), so one layer cannot blanket a machine.")
+    ap.add_argument("--health-test", type=int, default=0, metavar="SECS",
+                    help="HEALTH test: assert the cue_farm_health_* Prometheus "
+                         "family reports the fake farm's deterministic health "
+                         "story (every *0001 host is sick: kernel time 45%%, "
+                         "swap in use) per hardware shape and per host-spec "
+                         "group, straight from the host reports (no DB read).")
     ap.add_argument("--prodenv-test", type=int, default=0, metavar="SECS",
                     help="PRODENV chaos soak: fire continuous random admin "
                          "mutations (limit caps, live capped folders, host "
@@ -2455,6 +2485,7 @@ def main():
     watch = (args.strand or args.priority_starve or args.priority_spread
              or args.limit_test or args.license_test or args.poison_test
              or args.capdrop_test or args.prodenv_test or args.layercap_test
+             or args.health_test
              or args.folder_test or args.locality_test
              or args.depend_test or args.failover_test or args.tag_gpu_test
              or args.tagmax_test
@@ -2488,6 +2519,11 @@ def main():
         log(f"watching LAYERCAP (one-layer flood vs the per-host layer cap) "
             f"for {args.layercap_test}s ...")
         subprocess.run([VENV_PY, "layercap_watch.py", str(args.layercap_test), "3"],
+                       cwd=FARM)
+    elif args.health_test:
+        log(f"watching HEALTH (cue_farm_health_* vs the planted farm "
+            f"sickness) for {args.health_test}s ...")
+        subprocess.run([VENV_PY, "health_watch.py", str(args.health_test), "5"],
                        cwd=FARM)
     elif args.capdrop_test:
         log(f"watching CAPDROP (accounting mirror vs procs after a cap drop) "

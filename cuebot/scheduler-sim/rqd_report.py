@@ -103,7 +103,7 @@ def render_host(name, cores, mem_kb, free_mem_kb, total_swap_kb, free_swap_kb,
         num_gpus=gpus, total_gpu_mem=gpu_mem_kb, free_gpu_mem=free_gpu_mem_kb,
         load=0, boot_time=1, nimby_enabled=False,
         state=host_pb2.UP, tags=spec.host_tags(name),
-        attributes=spec.os_attrs())
+        attributes=spec.health_attrs(name))
 
 
 def frame_info(rec, rss_kb, used_swap_kb, now):
@@ -162,6 +162,8 @@ def _send_one(stub, name, cores, mem_kb, frames, now):
         swap_used = 0
         free_mem = mem_kb - sum_rss
         free_swap = total_swap
+    # Sick hosts (*0001) report standing swap use even without memory pressure.
+    free_swap = min(free_swap, spec.health_profile(name)[2])
 
     frame_infos = []
     for r, kb in zip(frames, rss):

@@ -154,6 +154,28 @@ public class SchedulerMetricsTests {
     }
 
     @Test
+    public void farmHealthIsPublishedPerSliceAndZeroedWhenAbsent() {
+        SchedulerMetrics m = enabledMetrics();
+        SchedulerMetrics.TickStats s = new SchedulerMetrics.TickStats();
+        SchedulerMetrics.HealthAgg a = new SchedulerMetrics.HealthAgg();
+        a.add(1000, 700, 45.0); // 30% of swap used (swapping), kernel 45%
+        a.add(1000, 1000, 5.0); // clean host
+        s.healthByHwtype.put("smtest128c", a);
+        m.recordTick(s);
+        assertEquals(0.15, sample("cue_farm_health_swap_used_frac", "name", "smtest128c"), 0.0001);
+        assertEquals(1.0, sample("cue_farm_health_hosts_swapping", "name", "smtest128c"), 0.0001);
+        assertEquals(25.0, sample("cue_farm_health_system_time_pct", "name", "smtest128c"), 0.0001);
+        assertEquals(45.0, sample("cue_farm_health_system_time_pct_max", "name", "smtest128c"),
+                0.0001);
+
+        // A slice that vanishes reads 0, not its last value.
+        m.recordTick(new SchedulerMetrics.TickStats());
+        assertEquals(0.0, sample("cue_farm_health_swap_used_frac", "name", "smtest128c"), 0.0001);
+        assertEquals(0.0, sample("cue_farm_health_system_time_pct_max", "name", "smtest128c"),
+                0.0001);
+    }
+
+    @Test
     public void groupsByStateSplitsActiveAndInactive() {
         SchedulerMetrics m = enabledMetrics();
         String metric = "cue_scheduler_groups_by_state";

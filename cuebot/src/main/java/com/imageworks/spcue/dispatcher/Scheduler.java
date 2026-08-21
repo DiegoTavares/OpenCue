@@ -141,6 +141,11 @@ public class Scheduler extends JdbcDaoSupport {
     // Records each tick's stats to Prometheus via recordTick (runTick).
     private SchedulerMetrics schedulerMetrics;
 
+    // Live farm-health ledger (swap, kernel time) fed by host reports; optional so the
+    // scheduler runs unchanged where the ledger bean is absent (unit tests).
+    @Autowired(required = false)
+    private FarmHealth farmHealth;
+
     // The in-progress tick's stats, handed to schedulerMetrics at tick end.
     private SchedulerMetrics.TickStats lastTickStats;
 
@@ -1284,6 +1289,8 @@ public class Scheduler extends JdbcDaoSupport {
         if (schedulerMetrics != null && schedulerMetrics.isEnabled()) {
             stats.coresByShow.putAll(showCoresLive);
             stats.runningFrames = runningFramesLive;
+            if (farmHealth != null)
+                aggregateFarmHealth(groups, farmHealth.snapshot(), stats);
         }
         launchCommitted(committed);
         int dispatchedNow = committed.size();
@@ -1830,6 +1837,32 @@ public class Scheduler extends JdbcDaoSupport {
     }
 
     // ---- grouping ---------------------------------------------------------
+
+    /**
+     * Fold the farm-health ledger into this tick's per-spec-group and per-hardware-shape
+     * aggregates. The group label is the human half of the spec key (normalized tags plus os); the
+     * shape label is cores and memory, e.g. 128c/112g. Hosts absent from the ledger (no report yet)
+     * contribute nothing.
+     */
+    private static void aggregateFarmHealth(Map<HostSpecKey, List<BookableHost>> groups,
+            Map<String, FarmHealth.HostHealth> health, SchedulerMetrics.TickStats stats) {
+        for (Map.Entry<HostSpecKey, List<BookableHost>> e : groups.entrySet()) {
+            HostSpecKey k = e.getKey();
+            String groupLabel = k.tagsNormalized + (k.hasGpu ? " gpu" : "") + "|" + k.os;
+            for (BookableHost h : e.getValue()) {
+                FarmHealth.HostHealth hh = health.get(h.hostName.toLowerCase());
+                if (hh == null)
+                    continue;
+                String shape = (h.coresTotal / 100) + "c/"
+                        + Math.round(h.memTotal / (1024.0 * 1024.0)) + "g";
+                stats.healthByGroup
+                        .computeIfAbsent(groupLabel, x -> new SchedulerMetrics.HealthAgg())
+                        .add(hh.swapTotalKb, hh.swapFreeKb, hh.sysTimePct);
+                stats.healthByHwtype.computeIfAbsent(shape, x -> new SchedulerMetrics.HealthAgg())
+                        .add(hh.swapTotalKb, hh.swapFreeKb, hh.sysTimePct);
+            }
+        }
+    }
 
     static Map<HostSpecKey, List<BookableHost>> groupByHostSpec(List<BookableHost> hosts) {
         Map<HostSpecKey, List<BookableHost>> groups = new LinkedHashMap<>();
