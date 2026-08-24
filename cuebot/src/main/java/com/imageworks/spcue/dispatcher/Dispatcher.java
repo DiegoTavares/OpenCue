@@ -177,7 +177,8 @@ public interface Dispatcher {
      * @param layer
      * @return the planned bookings, in placement order.
      */
-    List<FrameBooking> planHost(DispatchHost host, LayerInterface layer);
+    List<FrameBooking> planHost(DispatchHost host, LayerInterface layer, int effCores,
+            long effMemKb);
 
     /**
      * Dispatch a host to the specified job.

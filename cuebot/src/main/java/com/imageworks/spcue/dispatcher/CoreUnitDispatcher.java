@@ -437,7 +437,8 @@ public class CoreUnitDispatcher implements Dispatcher {
     }
 
     @Override
-    public List<FrameBooking> planHost(DispatchHost host, LayerInterface layer) {
+    public List<FrameBooking> planHost(DispatchHost host, LayerInterface layer, int effCores,
+            long effMemKb) {
         // Scheduler-native lean read. The planner already loaded this host and
         // already enforced show-burst and job caps in-tick, so we skip the
         // per-frame isShowAtOrOverBurst / isJobBookable DB round-trips the
@@ -453,13 +454,23 @@ public class CoreUnitDispatcher implements Dispatcher {
                 env.getProperty("dispatcher.frame.selfish.services", "").split(",");
         for (DispatchFrame frame : frames) {
 
+            // The planner sized this layer from its observed rss (LayerLiveMem):
+            // book the frames at that size, and reserve the memory the layer
+            // really uses, so the plan and the commit describe the same frame.
+            // 0 = no resize (no evidence, not threadable, or feature off).
+            if (effCores > frame.minCores && frame.threadable) {
+                frame.minCores = effCores;
+            }
+            if (effMemKb > frame.getMinMemory()) {
+                frame.setMinMemory(effMemKb);
+            }
+
             VirtualProc proc;
             try {
                 // expandThreadable=false: reserve exactly the requested cores. The
-                // planner scored this placement and decremented its snapshot by the
-                // frame's cores, so the thread-mode grab-idle expansion would
-                // over-reserve and corrupt that accounting. The planner fills hosts
-                // by planning multiple placements, not by one frame ballooning.
+                // planner scored and accounted this placement at the same figure,
+                // so the thread-mode grab-idle expansion would over-reserve and
+                // corrupt that accounting.
                 proc = VirtualProc.build(host, frame, false, selfishServices);
             } catch (RuntimeException e) {
                 // build() can still throw on edge cases; stop planning this host

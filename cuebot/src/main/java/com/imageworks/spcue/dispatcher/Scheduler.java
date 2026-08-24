@@ -104,6 +104,20 @@ public class Scheduler extends JdbcDaoSupport {
     // frames blanketing one machine, at the price of nibbling more hosts per flood.
     private volatile double layerHostMaxFrac = 0.25;
 
+    // Rss-driven sizing (no configuration, works out of the box; see Scheduler.md 3.9).
+    // cores=1 on a threadable layer means "let the system decide": such a layer probes at
+    // PROBE_FRAMES running frames while the farm has no rss evidence for it, then every
+    // later launch books round(median rss / the group's own memory-per-core) cores with
+    // its true memory, so scoring, fit, caps and booking all see the real shape. An
+    // explicit ask of 2+ cores books at full speed from frame one and is only ever
+    // corrected upward. The metric derives from the machines themselves, never a config
+    // constant. Probe size is deliberately a constant, not a property. The one exposed
+    // parameter is the memory-per-core ratio (scheduler.mem_per_core, KB): 0 (the
+    // default, shipped) derives it from each group's own hosts, so sizing follows the
+    // hardware out of the box; a studio can pin its core-selling ratio instead.
+    static final int PROBE_FRAMES = 8;
+    private volatile long memPerCoreKb = 0;
+
     // Seat bonus for host-based licenses (one checkout per machine): subtracted per seated pool so
     // placement packs licensed work onto the fewest hosts. Sized above the E-PVM spread. See doc.
     private volatile double licenseSeatBonus = 16.0;
@@ -145,6 +159,11 @@ public class Scheduler extends JdbcDaoSupport {
     // scheduler runs unchanged where the ledger bean is absent (unit tests).
     @Autowired(required = false)
     private FarmHealth farmHealth;
+
+    // Live per-layer rss ledger (fed by host reports) that sizes the launch-time core
+    // grant; optional so the scheduler runs without it (grants simply stay off).
+    @Autowired(required = false)
+    private LayerLiveMem layerLiveMem;
 
     // The in-progress tick's stats, handed to schedulerMetrics at tick end.
     private SchedulerMetrics.TickStats lastTickStats;
@@ -214,6 +233,15 @@ public class Scheduler extends JdbcDaoSupport {
     // Frames each layer runs per host right now ("hostId|layerId" -> count), read with the
     // affinity snapshot and advanced as the plan books. Backs the per-host layer cap.
     private Map<String, Integer> hostLayerFrames = new HashMap<>();
+    // Frames each layer runs farm-wide right now, read with the same snapshot. Backs the
+    // probe gate for layers with no rss evidence yet.
+    private Map<String, Integer> layerRunningFrames = new HashMap<>();
+    // Probe frames planned this tick per unproven layer.
+    private final Map<String, Integer> layerProbeUsed = new HashMap<>();
+    // Layers resized from rss evidence this tick: layerId -> {effective core points,
+    // effective memory KB}, read by planBookings so the commit books the same shape the
+    // planner scored.
+    private final Map<String, long[]> layerResize = new HashMap<>();
 
     // Layer-placements planned this tick, for the tick-breakdown log line.
     private int lastPlacements;
@@ -364,6 +392,7 @@ public class Scheduler extends JdbcDaoSupport {
         localityWindowFrames =
                 env.getProperty("scheduler.locality_window_frames", Integer.class, 64);
         layerHostMaxFrac = env.getProperty("scheduler.layer_host_max_frac", Double.class, 0.25);
+        memPerCoreKb = env.getProperty("scheduler.mem_per_core", Long.class, 0L);
         // Property name kept from the per-host-limit feature this supersedes, so
         // any site already setting it keeps its value.
         licenseSeatBonus = env.getProperty("scheduler.host_limit_seat_bonus", Double.class, 16.0);
@@ -441,7 +470,8 @@ public class Scheduler extends JdbcDaoSupport {
      */
     private static final String SELECT_CANDIDATES_FOR_GROUP = "SELECT " + "  l.pk_layer, "
             + "  l.pk_job, " + "  j.pk_show, " + "  l.int_cores_min, " + "  l.int_mem_min, "
-            + "  l.int_gpus_min, " + "  l.int_gpu_mem_min, " + "  jr.int_priority, "
+            + "  l.b_threadable, " + "  l.int_cores_max, " + "  l.int_gpus_min, "
+            + "  l.int_gpu_mem_min, " + "  jr.int_priority, "
             + "  jr.int_cores       AS job_cores_in_use, "
             + "  jr.int_max_cores   AS job_max_cores, "
             + "  sub.int_cores      AS show_cores_in_use, " + "  sub.int_burst      AS show_burst, "
@@ -600,6 +630,8 @@ public class Scheduler extends JdbcDaoSupport {
                     c.showId = rs.getString("pk_show");
                     c.layerCoresMin = rs.getInt("int_cores_min");
                     c.layerMemMin = rs.getLong("int_mem_min");
+                    c.threadable = rs.getBoolean("b_threadable");
+                    c.layerCoresMax = rs.getInt("int_cores_max");
                     c.layerGpusMin = rs.getInt("int_gpus_min");
                     c.layerGpuMemMin = rs.getLong("int_gpu_mem_min");
                     c.priority = rs.getInt("int_priority");
@@ -1142,6 +1174,12 @@ public class Scheduler extends JdbcDaoSupport {
         List<LayerCandidate> candidates;
         try {
             candidates = readLayerCandidatesForGroup(spec, maxCoresTotalInGroup);
+            // Size threadable layers from their observed rss before anything scores or
+            // fits them, against the studio's memory-per-core policy ratio (or, when
+            // none is set, this group's own derived one); 1-core layers with no
+            // evidence yet stay unproven and get the probe gate.
+            resizeFromLiveMem(candidates, layerLiveMem,
+                    memPerCoreKb > 0 ? memPerCoreKb : memPerWholeCoreKb(fullGroup), layerResize);
         } catch (RuntimeException e) {
             long nowMs = System.currentTimeMillis();
             if (nowMs - lastCandidateErrWarnMs >= GROUP_WARN_INTERVAL_MS) {
@@ -1337,7 +1375,11 @@ public class Scheduler extends JdbcDaoSupport {
                 DispatchHost host = hostManager.getDispatchHost(hostId);
                 for (String layerId : layerIds) {
                     LayerInterface layer = jobManager.getLayer(layerId);
-                    List<FrameBooking> got = dispatcher.planHost(host, layer);
+                    // The rss resize the planner scored with, so the commit books the
+                    // same shape. {cores, memKb}; absent = book the layer's own ask.
+                    long[] rz = layerResize.get(layerId);
+                    List<FrameBooking> got = dispatcher.planHost(host, layer,
+                            rz != null ? (int) rz[0] : 0, rz != null ? rz[1] : 0);
                     if (got.isEmpty()) {
                         int streak = planZeroStreak.merge(layerId, 1, Integer::sum);
                         if (streak % planZeroWarnTicks == 0) {
@@ -1378,6 +1420,69 @@ public class Scheduler extends JdbcDaoSupport {
         // layers not planned this tick so the map tracks live pathologies, not vanished work.
         planZeroStreak.keySet().retainAll(plannedLayerIds);
         return planned;
+    }
+
+    /**
+     * Resize threadable candidates from the layer's observed rss BEFORE placement, so scoring, fit,
+     * caps, accounting and booking all see the layer's real shape. The size is the median rss of
+     * the layer's recent frames ({@link LayerLiveMem}), never the declared memory: declarations
+     * lie, running processes do not, and a single haywire process is one sample and cannot resize
+     * the layer. cores = round(rss / memPerCoreKb), never below the ask, never past the layer's
+     * max; memory = max(declared, rss) so packing stops trusting an under-declaration too. A layer
+     * with no evidence keeps its ask; when that ask is exactly 1 core ("let the system decide",
+     * the shape nobody sized) it stays rssProven=false, which arms the probe gate in the dispatch
+     * loop: at most {@link #PROBE_FRAMES} of its frames run until the farm has seen it (the
+     * production rss-watcher script's loop, inside the scheduler). An explicit ask of 2+ cores was
+     * sized by someone and books at full speed from frame one. A held layer that has already
+     * completed a probe's worth of frames without ever landing in a report runs too fast to sample
+     * and is released, never starved. Non-threadable layers are never resized (a single-threaded
+     * renderer cannot use the cores). The metric is the group's own memory-per-core, derived from
+     * the machines each tick, never configuration.
+     */
+    static void resizeFromLiveMem(List<LayerCandidate> candidates, LayerLiveMem liveMem,
+            long memPerCoreKb, Map<String, long[]> resizeOut) {
+        for (LayerCandidate c : candidates) {
+            if (liveMem == null || !c.threadable || memPerCoreKb <= 0 || c.layerCoresMin <= 0) {
+                c.rssProven = true;
+                continue;
+            }
+            long typKb = liveMem.typicalRssKb(c.layerId);
+            if (typKb <= 0) {
+                // No evidence. Only a 1-core ask probes: nobody sized it, so nothing
+                // about it can be trusted until the reports have seen it. A layer that
+                // completed a probe's worth of frames unsampled is too fast to sample.
+                c.rssProven = c.layerCoresMin != 100 || c.frameSuccessCount >= PROBE_FRAMES;
+                continue;
+            }
+            c.rssProven = true;
+            int eff = (int) Math.round(typKb / (double) memPerCoreKb) * 100;
+            if (c.layerCoresMax > 0 && eff > c.layerCoresMax) {
+                eff = c.layerCoresMax;
+            }
+            int cores = Math.max(c.layerCoresMin, eff);
+            long memKb = Math.max(c.layerMemMin, typKb);
+            if (cores != c.layerCoresMin || memKb != c.layerMemMin) {
+                c.layerCoresMin = cores;
+                c.layerMemMin = memKb;
+                resizeOut.put(c.layerId, new long[] {cores, memKb});
+            }
+        }
+    }
+
+    /**
+     * The group's own memory-per-core in KB (whole cores), the self-derived sizing metric: total
+     * bookable memory over total cores of the group's hosts. On a 3.5G-per-core farm an 18G layer
+     * sizes to 5 cores; buy different machines and the figure follows, with no configuration.
+     */
+    static long memPerWholeCoreKb(List<BookableHost> hosts) {
+        long mem = 0;
+        long cores = 0;
+        for (BookableHost h : hosts) {
+            mem += h.memTotal;
+            cores += h.coresTotal;
+        }
+        long wholeCores = cores / 100;
+        return wholeCores > 0 ? mem / wholeCores : 0;
     }
 
     /**
@@ -1605,6 +1710,9 @@ public class Scheduler extends JdbcDaoSupport {
         Map<String, Set<String>> affinity = new HashMap<>();
         Map<String, Integer> counts = new HashMap<>();
         hostLayerFrames = counts;
+        layerRunningFrames = new HashMap<>();
+        layerProbeUsed.clear();
+        layerResize.clear();
         if (!localityEnabled && layerHostMaxFrac <= 0)
             return affinity;
         getJdbcTemplate().query("SELECT pk_host, pk_layer, COUNT(*) AS n FROM proc "
@@ -1613,6 +1721,7 @@ public class Scheduler extends JdbcDaoSupport {
                     String layer = rs.getString("pk_layer");
                     affinity.computeIfAbsent(host, k -> new HashSet<>()).add(layer);
                     counts.put(host + "|" + layer, rs.getInt("n"));
+                    layerRunningFrames.merge(layer, rs.getInt("n"), Integer::sum);
                 });
         return affinity;
     }
@@ -2007,6 +2116,17 @@ public class Scheduler extends JdbcDaoSupport {
 
             boolean placed = false;
             while (!capped) {
+                // Probe gate: a 1-core threadable layer with no rss evidence ("let the
+                // system decide") may hold only PROBE_FRAMES frames farm-wide, so a
+                // brand-new mis-sized layer cannot blast the farm before the reports
+                // have seen what it really uses.
+                int probeHeadroom = Integer.MAX_VALUE;
+                if (!c.rssProven) {
+                    probeHeadroom = PROBE_FRAMES - layerRunningFrames.getOrDefault(c.layerId, 0)
+                            - layerProbeUsed.getOrDefault(c.layerId, 0);
+                    if (probeHeadroom <= 0)
+                        break;
+                }
                 BookableHost best = null;
                 double bestScore = Double.POSITIVE_INFINITY;
                 for (BookableHost h : hosts) {
@@ -2086,6 +2206,8 @@ public class Scheduler extends JdbcDaoSupport {
                 // nothing.
                 if (estFrames > c.waitingFrameCount)
                     estFrames = c.waitingFrameCount;
+                if (estFrames > probeHeadroom)
+                    estFrames = probeHeadroom;
                 if (estFrames <= 0)
                     break;
                 // Cap the commit to the limit's remaining headroom. The tick-wide
@@ -2152,6 +2274,8 @@ public class Scheduler extends JdbcDaoSupport {
                 showCoresUsed.put(c.showId, c.showCoresInUse);
                 if (layerHostMaxFrac > 0)
                     hostLayerFrames.merge(best.hostId + "|" + c.layerId, estFrames, Integer::sum);
+                if (!c.rssProven)
+                    layerProbeUsed.merge(c.layerId, estFrames, Integer::sum);
                 if (c.limitId != null)
                     limitUsed.merge(c.limitId, estFrames, Integer::sum);
                 if (c.folderMax >= 0)
@@ -2963,9 +3087,14 @@ public class Scheduler extends JdbcDaoSupport {
         String showId;
         int layerCoresMin;
         long layerMemMin;
+        boolean threadable;
+        int layerCoresMax;
         int layerGpusMin;
         long layerGpuMemMin;
         int priority;
+        // True when rss sizing does not gate this layer: not threadable, feature off,
+        // or the ledger has evidence (and the layer was resized from it).
+        boolean rssProven;
         // Mutable in-tick accounting.
         int jobCoresInUse;
         int jobMaxCores;

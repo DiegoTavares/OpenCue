@@ -475,6 +475,50 @@ tick already holds. The waitlist reuses the loop's own verdicts, and the
 `show_cores` gauge is a live ledger (plus on the batch commit, minus on the
 drain; a show that drains to zero drops out), not a query over procs.
 
+### 3.9 Rss-driven layer sizing (cores=1 means "let the system decide")
+
+The production disease: a layer whose frames really hold 18G but book 1 core.
+A few frames exhaust a host's memory and the rest of its cores sit idle but
+unbookable. PSTs used to fix it by hand, watching each task's rss and editing
+the layer mid-job; this feature is that loop inside the scheduler. It has no
+configuration beyond one policy ratio: constants live in the code, and the
+metric either derives from the farm or is pinned by `scheduler.mem_per_core`.
+
+Every RQD host report feeds `LayerLiveMem`, an in-memory ledger of each
+layer's recent per-frame rss peaks (last 32 frames, no SQL). The layer's size
+is the MEDIAN of those peaks over at least 4 sampled frames: declarations are
+never trusted for cores, and a single haywire process is one sample and
+cannot resize a layer (the leaker itself stays the OOM machinery's problem).
+Before placement, a threadable layer with evidence is resized to
+`round(rss / the group's own memory-per-core)` cores and `max(declared, rss)`
+memory, so the placement score, the fit check, every cap and the booking all
+see the layer's real shape. The metric defaults to self-derivation: each
+tick, each host group's own memory-per-core (total memory over total cores),
+so an 18G layer sizes to 5 cores on a 3.5G-per-core farm and follows the
+hardware when the farm changes. Setting `scheduler.mem_per_core` (KB per
+core) pins a studio-wide ratio instead. Bounds:
+never below the ask, never past the layer's max cores, non-threadable layers
+never change (a single-threaded renderer cannot use the cores). The resize
+figure rides into `planHost`, so the commit books exactly the shape the
+planner scored: no divergence.
+
+The contract for artists and service defaults: setting cores to 1 on a
+threadable layer means "let the system decide". Such a layer, before any rss
+evidence exists, runs at most 8 probe frames (about one report cycle) while
+the farm looks at what it really uses; then every later launch books at its
+true size. An explicit ask of 2 or more cores was sized by a person and books
+at full speed from frame one, corrected only upward. A held layer that
+completes a probe's worth of frames without ever landing in a report runs
+too fast to sample and is released, never starved. Cuebot restarts empty the
+ledger; active layers repopulate it within one report cycle.
+
+Verified by the `STRANDGROW` scenario: an 18G 1-core flood must show a probe
+of ~8 ask-sized frames, later launches at the derived share (500 points on
+the sim farm), an untouched non-threadable control, and the cores back at
+work. The pre-feature disease (every frame at 1 core, ~10% core utilisation
+on a memory-full farm) was demonstrated fail-first against the unmodified
+scheduler.
+
 ## 4. Concurrency model
 
 The planner reasons over an in-memory snapshot while commits and external
@@ -606,6 +650,8 @@ already takes most of the load off it.
 | `scheduler.license.env_key` | `CUE_LICENSES` | Layer environment key carrying the license names. |
 | `scheduler.license.denied_exit_statuses` | (empty) | Exit codes meaning "could not get a license": such frames requeue WAITING without spending a retry. |
 | `scheduler.host_limit_seat_bonus` | `16.0` | Score bonus per host_based license pool the host already holds a seat in; packs licensed work onto the fewest machines. |
+| `scheduler.layer_host_max_frac` | `0.25` | Per-host layer cap: one layer may hold at most this fraction of a host's cores (as frames, floor 8), so a flood spills across hosts instead of blanketing one. 0 disables. |
+| `scheduler.mem_per_core` | `0` | Memory-per-core ratio (KB) for rss-driven layer sizing (§3.9). 0 (the default) derives it from each group's own hosts; set e.g. 4194304 to pin 4G/core studio-wide. |
 | `dispatcher.job_frame_dispatch_max` | `8` | Max frames of one job booked onto a host per tick. |
 | `dispatcher.host_frame_dispatch_max` | `12` | Max frames booked onto a host per tick. |
 

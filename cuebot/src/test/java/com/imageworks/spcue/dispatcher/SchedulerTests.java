@@ -14,11 +14,18 @@
 
 package com.imageworks.spcue.dispatcher;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import org.junit.Test;
+
+import com.imageworks.spcue.DispatchFrame;
+import com.imageworks.spcue.DispatchHost;
+import com.imageworks.spcue.VirtualProc;
+import com.imageworks.spcue.grpc.report.RunningFrameInfo;
+import com.imageworks.spcue.util.CueUtil;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -420,5 +427,151 @@ public class SchedulerTests {
     @Test
     public void backfillRefusedWhenHostReadyTimeIsUnknown() {
         assertFalse(Scheduler.backfillFits(true, 1, Integer.MAX_VALUE));
+    }
+
+    // ---- rss-driven resize: resizeFromLiveMem + LayerLiveMem --------------
+
+    private static final long MPC = 4L * CueUtil.GB; // the 4G/core metric
+
+    /** A ledger that has seen {@code n} frames of the layer at the given rss values. */
+    private static LayerLiveMem seen(String layerId, long... rssKbs) {
+        LayerLiveMem mem = new LayerLiveMem();
+        int i = 0;
+        for (long kb : rssKbs) {
+            mem.record(Arrays.asList(RunningFrameInfo.newBuilder().setLayerId(layerId)
+                    .setFrameId("f" + (i++)).setMaxRss(kb).setRss(kb).build()));
+        }
+        return mem;
+    }
+
+    private static Scheduler.LayerCandidate grantLayer(String layerId, boolean threadable,
+            int coresMin, int coresMax, long memMinKb) {
+        Scheduler.LayerCandidate c = layer(coresMin, memMinKb, 0, 0);
+        c.layerId = layerId;
+        c.threadable = threadable;
+        c.layerCoresMax = coresMax;
+        return c;
+    }
+
+    private static Map<String, long[]> resize(Scheduler.LayerCandidate c, LayerLiveMem mem) {
+        Map<String, long[]> out = new java.util.HashMap<>();
+        Scheduler.resizeFromLiveMem(Arrays.asList(c), mem, MPC, out);
+        return out;
+    }
+
+    @Test
+    public void resizeUsesTheMedianOfRecentFrames() {
+        // Four frames near 18G: the layer really is an 18G layer -> 5 cores,
+        // and the memory the planner packs with is the observed figure.
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("hog", true, 100, 0, 4L * CueUtil.GB);
+        Map<String, long[]> out = resize(c, seen("hog", g18, g18, g18, g18));
+        assertEquals(500, c.layerCoresMin);
+        assertEquals(g18, c.layerMemMin);
+        assertTrue(c.rssProven);
+        assertEquals(500, out.get("hog")[0]);
+    }
+
+    @Test
+    public void oneHaywireProcessCannotResizeTheLayer() {
+        // Seven honest 2G frames and one 60G leaker: the median stays 2G, the
+        // layer stays at its ask. The leaker is the OOM machinery's problem.
+        long g2 = 2L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("leak", true, 100, 0, g2);
+        LayerLiveMem mem = seen("leak", g2, g2, g2, g2, g2, g2, g2, 60L * CueUtil.GB);
+        resize(c, mem);
+        assertEquals(100, c.layerCoresMin);
+        assertTrue(c.rssProven);
+    }
+
+    @Test
+    public void resizeWaitsForEnoughSamples() {
+        // Three frames seen (under MIN_SAMPLES): no resize, probe gate armed.
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("young", true, 100, 0, g18);
+        resize(c, seen("young", g18, g18, g18));
+        assertEquals(100, c.layerCoresMin);
+        assertFalse(c.rssProven);
+    }
+
+    @Test
+    public void resizeNeverTouchesNonThreadable() {
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("ctrl", false, 100, 0, g18);
+        resize(c, seen("ctrl", g18, g18, g18, g18));
+        assertEquals(100, c.layerCoresMin);
+        assertTrue(c.rssProven); // non-threadable is never probed either
+    }
+
+    @Test
+    public void resizeStopsAtTheLayersMaxCores() {
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("capped", true, 100, 200, g18);
+        resize(c, seen("capped", g18, g18, g18, g18));
+        assertEquals(200, c.layerCoresMin);
+    }
+
+    @Test
+    public void wideAskAboveTheMetricIsPreserved() {
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("wide", true, 800, 0, g18);
+        resize(c, seen("wide", g18, g18, g18, g18));
+        assertEquals(800, c.layerCoresMin);
+    }
+
+    @Test
+    public void ledgerFoldsPerFramePeaksAndForgetsUnknownLayers() {
+        long g18 = 18L * CueUtil.GB;
+        LayerLiveMem mem = seen("hog", g18, g18, g18, g18);
+        // The same frame reporting a lower rss later must not add a new sample.
+        mem.record(Arrays.asList(RunningFrameInfo.newBuilder().setLayerId("hog").setFrameId("f0")
+                .setMaxRss(1L * CueUtil.GB).build()));
+        assertEquals(g18, mem.typicalRssKb("hog"));
+        assertEquals(0, mem.typicalRssKb("never-seen"));
+    }
+
+    @Test
+    public void oneCoreAskIsGatedRegardlessOfDeclaredMemory() {
+        // cores=1 means "let the system decide": with no evidence the layer
+        // probes, whatever its declaration claims (declarations are untrusted).
+        Scheduler.LayerCandidate c = grantLayer("comp", true, 100, 0, 2L * CueUtil.GB);
+        resize(c, new LayerLiveMem());
+        assertEquals(100, c.layerCoresMin);
+        assertFalse(c.rssProven);
+    }
+
+    @Test
+    public void explicitAskAboveOneBooksAtFullSpeed() {
+        // Someone sized this layer (2 cores): never gated, corrected later
+        // only upward when evidence arrives.
+        Scheduler.LayerCandidate c = grantLayer("sized", true, 200, 0, 18L * CueUtil.GB);
+        resize(c, new LayerLiveMem());
+        assertEquals(200, c.layerCoresMin);
+        assertTrue(c.rssProven);
+    }
+
+    @Test
+    public void metricDerivesFromTheGroupsOwnHosts() {
+        // 16 cores / 56G usable = 3.5G per core; an 18G layer sizes to 5.
+        long metric = Scheduler.memPerWholeCoreKb(
+                Arrays.asList(freeHost(1600, 56L * CueUtil.GB, 0, 0)));
+        assertEquals(56L * CueUtil.GB / 16, metric);
+        long g18 = 18L * CueUtil.GB;
+        Scheduler.LayerCandidate c = grantLayer("hog", true, 100, 0, g18);
+        Map<String, long[]> out = new java.util.HashMap<>();
+        Scheduler.resizeFromLiveMem(Arrays.asList(c), seen("hog", g18, g18, g18, g18), metric,
+                out);
+        assertEquals(500, c.layerCoresMin);
+    }
+
+    @Test
+    public void fastLayerIsReleasedAfterProbeCompletions() {
+        // Memory-heavy but its frames complete faster than the report cycle:
+        // a probe's worth of successes with no samples releases the hold.
+        Scheduler.LayerCandidate c = grantLayer("fast", true, 100, 0, 18L * CueUtil.GB);
+        c.frameSuccessCount = 8;
+        resize(c, new LayerLiveMem());
+        assertEquals(100, c.layerCoresMin);
+        assertTrue(c.rssProven);
     }
 }

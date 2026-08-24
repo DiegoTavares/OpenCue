@@ -406,6 +406,7 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "inject_capdrop.py", "capdrop_watch.py",
                      "inject_prodenv.py", "prodenv_watch.py",
                      "inject_layercap.py", "layercap_watch.py",
+                     "inject_strandgrow.py", "strandgrow_watch.py",
                      "health_watch.py",
                      "live_stats.py",
                      "gen_jobs.py", "drain_test.py", "metrics.py", "stats.py",
@@ -1138,6 +1139,13 @@ def start_prodenv_injector(duration):
     spawn(["inject_prodenv.py", str(duration)], f"{FARM}/inject_prodenv.log")
 
 
+def start_strandgrow_injector(duration):
+    log(f"starting STRANDGROW flood (18G threadable 1-core layer + "
+        f"non-threadable control) for {duration}s ...")
+    spawn(["inject_strandgrow.py", str(duration)],
+          f"{FARM}/inject_strandgrow.log")
+
+
 def start_layercap_injector(duration):
     log(f"starting LAYERCAP flood (one deep 1-core layer; the cap must stop it "
         f"from blanketing any host, for {duration}s) ...")
@@ -1501,6 +1509,24 @@ def _verify_check(name, gdir, logp, cblog):
                     f"{pm.group(1) if pm else '?'} frames on "
                     f"{pm.group(2) if pm else '?'} hosts, cap violations "
                     f"{vm.group(1) if vm else '?'}")
+    if name == "STRANDGROW":
+        # The watcher's verdict is the whole check: memory-heavy threadable
+        # frames book at their metric share, the non-threadable control does
+        # not, and the farm's cores work instead of stranding.
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        fm = re.search(r"flood median (\d+) pts, (\d+)% at (\d+) pts over "
+                       r"(\d+) started frames", txt)
+        cm = re.search(r"ctrl max (\d+)", txt)
+        um = re.search(r"peak core util ([0-9.]+)%", txt)
+        ok = bool(re.search(r"(?m)^PASS:", txt))
+        return ok, (f"18G 1-core flood vs core grant: flood median "
+                    f"{fm.group(1) if fm else '?'} pts over "
+                    f"{fm.group(4) if fm else '?'} frames, ctrl max "
+                    f"{cm.group(1) if cm else '?'}, peak core util "
+                    f"{um.group(1) if um else '?'}%")
     if name == "HEALTH":
         # The watcher's verdict is the whole check: every hardware shape
         # reports the planted sickness on the metrics endpoint, and the
@@ -1795,6 +1821,17 @@ def run_verify():
         ("LAYERCAP", ["--hosts", "3,4,10", "--compress", "30",
                       "--layercap-test", str(D)],
          {"SIM_LAYER_HOST_MAX_FRAC": "0.25"}),
+        # STRANDGROW: 1-core layers whose frames REALLY hold 18G of rss (the
+        # fake RQD pins their reported rss; declarations are not trusted). The
+        # first wave books at the ask (no evidence yet), then the scheduler
+        # must grow every later launch to the metric share (4G/core -> 500
+        # points) so hosts do not sit memory-full with idle cores. A
+        # non-threadable control with the same rss must stay at 100 points.
+        # Fail-first: without the grant the flood stays at the ask and
+        # strands ~80% of the farm's cores.
+        ("STRANDGROW", ["--hosts", "3,4,10",
+                        "--strandgrow-test", str(max(D, 240))],
+         {"SIM_RSS_PIN": "simstrandgrow=18"}),
         # HEALTH: the farm-health Prometheus family. The fake farm's pingers
         # report a deterministic sickness (every *0001 host: kernel time 45%,
         # a quarter of its swap spent); the cue_farm_health_* gauges must
@@ -2098,6 +2135,15 @@ def main():
                          "accounting mirror (job_resource.int_cores) keeps "
                          "tracking SUM(procs) instead of wedging on the legacy "
                          "verify trigger.")
+    ap.add_argument("--strandgrow-test", type=int, default=0, metavar="SECS",
+                    help="STRANDGROW test: flood threadable 1-core layers "
+                         "whose frames really hold 18G of rss and assert the "
+                         "scheduler probes a handful, waits for the rss "
+                         "evidence, then books later launches at the farm's "
+                         "own memory-per-core share (about 3.5G/core here, "
+                         "18G -> 5 cores) so the hosts' cores work instead of "
+                         "stranding behind exhausted memory; a "
+                         "non-threadable control must stay at 1 core.")
     ap.add_argument("--layercap-test", type=int, default=0, metavar="SECS",
                     help="LAYERCAP test: flood one deep 1-core layer and assert "
                          "no host ever holds more than the per-host layer cap "
@@ -2461,6 +2507,8 @@ def main():
         start_prodenv_injector(args.prodenv_test)
     if args.layercap_test:
         start_layercap_injector(args.layercap_test)
+    if args.strandgrow_test:
+        start_strandgrow_injector(args.strandgrow_test)
     if lic_secs:
         start_license_injector(lic_secs)
     if args.folder_test:
@@ -2485,7 +2533,7 @@ def main():
     watch = (args.strand or args.priority_starve or args.priority_spread
              or args.limit_test or args.license_test or args.poison_test
              or args.capdrop_test or args.prodenv_test or args.layercap_test
-             or args.health_test
+             or args.health_test or args.strandgrow_test
              or args.folder_test or args.locality_test
              or args.depend_test or args.failover_test or args.tag_gpu_test
              or args.tagmax_test
@@ -2520,6 +2568,11 @@ def main():
             f"for {args.layercap_test}s ...")
         subprocess.run([VENV_PY, "layercap_watch.py", str(args.layercap_test), "3"],
                        cwd=FARM)
+    elif args.strandgrow_test:
+        log(f"watching STRANDGROW (memory-heavy frames vs the launch-time "
+            f"core grant) for {args.strandgrow_test}s ...")
+        subprocess.run([VENV_PY, "strandgrow_watch.py",
+                        str(args.strandgrow_test), "5"], cwd=FARM)
     elif args.health_test:
         log(f"watching HEALTH (cue_farm_health_* vs the planted farm "
             f"sickness) for {args.health_test}s ...")

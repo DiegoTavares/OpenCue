@@ -106,6 +106,11 @@ public class HostReportHandler {
     @Autowired(required = false)
     private FarmHealth farmHealth;
 
+    // Live per-layer rss ledger for the scheduler's launch-time core grant; optional
+    // so report handling never depends on it.
+    @Autowired(required = false)
+    private LayerLiveMem layerLiveMem;
+
     // Reconcile idle resources roughly every 10 minutes per host.
     // Host reports arrive ~every 10s, so this fires ~1 in 60 reports.
     private static final long RECONCILE_INTERVAL_MS = 600_000;
@@ -180,6 +185,8 @@ public class HostReportHandler {
         long startTime = System.currentTimeMillis();
         if (farmHealth != null)
             farmHealth.record(report.getHost());
+        if (layerLiveMem != null)
+            layerLiveMem.record(report.getFramesList());
         try {
             // Record Prometheus metric for host report
             if (prometheusMetrics != null) {
