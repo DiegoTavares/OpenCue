@@ -63,6 +63,8 @@ import com.imageworks.spcue.grpc.rqd.RunFrame;
 import com.imageworks.spcue.monitoring.KafkaEventPublisher;
 import com.imageworks.spcue.monitoring.MonitoringEventBuilder;
 import com.imageworks.spcue.rqd.RqdClient;
+import com.imageworks.spcue.rqd.RqdLaunchUnknownOutcomeException;
+import com.imageworks.spcue.PrometheusMetricsCollector;
 import com.imageworks.spcue.service.BookingManager;
 import com.imageworks.spcue.service.DependManager;
 import com.imageworks.spcue.util.FrameSet;
@@ -80,6 +82,18 @@ public class DispatchSupportService implements DispatchSupport {
      */
     private static final long DEFAULT_LOST_PROC_MAX_DEFER_MS = 1200000;
 
+    /**
+     * Budget for confirming a frame's state on RQD after a launch RPC failed with an unknown
+     * outcome, before {@link #resolveUnknownLaunchOutcome} gives up and keeps the booking (fail
+     * closed). Overridable via the {@code dispatcher.launch_confirm_budget_ms} property; zero or
+     * negative restores the legacy behavior of releasing the booking immediately with a best-effort
+     * kill.
+     */
+    private static final long DEFAULT_LAUNCH_CONFIRM_BUDGET_MS = 10000;
+
+    /** Delay between {@code isFrameRunning} polls in {@link #resolveUnknownLaunchOutcome}. */
+    private static final long LAUNCH_CONFIRM_POLL_INTERVAL_MS = 2000;
+
     private JobDao jobDao;
     private FrameDao frameDao;
     private LayerDao layerDao;
@@ -95,6 +109,7 @@ public class DispatchSupportService implements DispatchSupport {
     private BookingDao bookingDao;
     private KafkaEventPublisher kafkaEventPublisher;
     private MonitoringEventBuilder monitoringEventBuilder;
+    private PrometheusMetricsCollector prometheusMetrics;
 
     @Autowired
     private Environment env;
@@ -226,6 +241,10 @@ public class DispatchSupportService implements DispatchSupport {
         try {
             rqdClient.launchFrame(prepareRqdRunFrame(proc, frame), proc);
             dispatchedProcs.getAndIncrement();
+        } catch (RqdLaunchUnknownOutcomeException e) {
+            // Preserve the classification: the frame may be running on the host, and the
+            // dispatcher's rollback must not release the booking without confirming.
+            throw e;
         } catch (Exception e) {
             throw new DispatcherException(
                     proc.getName() + " could not be booked on " + frame.getName() + ", " + e);
@@ -652,6 +671,82 @@ public class DispatchSupportService implements DispatchSupport {
     }
 
     @Override
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public boolean resolveUnknownLaunchOutcome(VirtualProc proc, DispatchFrame frame) {
+        long budgetMs = env.getProperty("dispatcher.launch_confirm_budget_ms", Long.class,
+                DEFAULT_LAUNCH_CONFIRM_BUDGET_MS);
+        if (budgetMs <= 0) {
+            // Fail-closed resolution disabled: legacy rollback (release first, best-effort kill).
+            unbookProc(proc, "launch failed, releasing without confirmation (legacy behavior)");
+            clearFrame(frame);
+            try {
+                rqdClient.killFrame(proc, "An accounting error occured when booking this frame.");
+            } catch (Exception e) {
+                // Expected to fail when the launch itself could not reach the host.
+            }
+            countLaunchOutcome("released_unconfirmed");
+            return true;
+        }
+
+        /*
+         * Confirmation requires two consecutive not-running polls: a launch request that reached
+         * the host but has not been processed yet would make a single immediate poll report a frame
+         * that is about to start as gone.
+         */
+        long deadline = System.currentTimeMillis() + budgetMs;
+        int notRunningPolls = 0;
+        while (true) {
+            try {
+                if (rqdClient.isFrameRunning(proc.hostName, frame.getFrameId())) {
+                    logger.warn("Launch of frame " + frame.getName() + " on " + proc.getName()
+                            + " failed on this side but the frame IS running on the host. "
+                            + "Keeping the booking; the run will finish through its own "
+                            + "frame complete report.");
+                    countLaunchOutcome("running_kept");
+                    return false;
+                }
+                notRunningPolls++;
+                if (notRunningPolls >= 2) {
+                    logger.info("Launch of frame " + frame.getName() + " on " + proc.getName()
+                            + " confirmed not running on the host, releasing the booking.");
+                    unbookProc(proc, "launch failed, frame confirmed not running");
+                    clearFrame(frame);
+                    countLaunchOutcome("released");
+                    return true;
+                }
+            } catch (Exception e) {
+                logger.warn("Launch of frame " + frame.getName() + " on " + proc.getName()
+                        + " failed and the frame's state could not be confirmed (" + e + "). "
+                        + "Keeping the booking to avoid double-booking; the orphaned-proc "
+                        + "reaper will reclaim it if the frame never started.");
+                countLaunchOutcome("unconfirmed_kept");
+                return false;
+            }
+            if (System.currentTimeMillis() + LAUNCH_CONFIRM_POLL_INTERVAL_MS > deadline) {
+                logger.warn("Launch of frame " + frame.getName() + " on " + proc.getName()
+                        + " failed and the confirmation budget expired before the frame was "
+                        + "confirmed not running. Keeping the booking to avoid double-booking.");
+                countLaunchOutcome("unconfirmed_kept");
+                return false;
+            }
+            try {
+                Thread.sleep(LAUNCH_CONFIRM_POLL_INTERVAL_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                countLaunchOutcome("unconfirmed_kept");
+                return false;
+            }
+        }
+    }
+
+    private void countLaunchOutcome(String resolution) {
+        DispatchSupport.unknownLaunchOutcomes.getAndIncrement();
+        if (prometheusMetrics != null) {
+            prometheusMetrics.incrementFrameLaunchOutcomeUnknown(resolution);
+        }
+    }
+
+    @Override
     @Transactional(propagation = Propagation.REQUIRED)
     public void updateProcMemoryUsage(FrameInterface frame, long rss, long maxRss, long pss,
             long maxPss, long vsize, long maxVsize, long usedGpuMemory, long maxUsedGpuMemory,
@@ -772,6 +867,10 @@ public class DispatchSupportService implements DispatchSupport {
 
     public void setShowDao(ShowDao showDao) {
         this.showDao = showDao;
+    }
+
+    public void setPrometheusMetrics(PrometheusMetricsCollector prometheusMetrics) {
+        this.prometheusMetrics = prometheusMetrics;
     }
 
     public BookingManager getBookingManager() {

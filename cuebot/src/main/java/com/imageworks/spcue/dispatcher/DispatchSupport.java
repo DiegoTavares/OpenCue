@@ -107,6 +107,12 @@ public interface DispatchSupport {
     static final AtomicLong bookingErrors = new AtomicLong(0);
 
     /**
+     * A frame launch RPC failed without proving the frame did not start on the host, entering the
+     * confirm-before-release resolution of {@link #resolveUnknownLaunchOutcome}.
+     */
+    static final AtomicLong unknownLaunchOutcomes = new AtomicLong(0);
+
+    /**
      * Long for counting dispatch retries
      */
     static final AtomicLong bookingRetries = new AtomicLong(0);
@@ -192,6 +198,31 @@ public interface DispatchSupport {
      *         release was deferred to avoid double-booking a possibly-still-rendering host
      */
     boolean lostProc(VirtualProc proc, String reason, int exitStatus);
+
+    /**
+     * Resolves a booking whose launch RPC failed without proving the frame never started (see
+     * {@link com.imageworks.spcue.rqd.RqdLaunchUnknownOutcomeException}). The frame's state on the
+     * host is confirmed before anything is released:
+     *
+     * - Confirmed running: the proc and RUNNING frame are kept; the run finishes through its own
+     * frame complete report.
+     *
+     * - Confirmed not running (two consecutive polls within
+     * {@code dispatcher.launch_confirm_budget_ms}): the proc is deleted and the frame reset to
+     * WAITING for re-dispatch.
+     *
+     * - Unconfirmable (host unreachable, budget expired): fail closed, the booking is kept; the
+     * orphaned-proc reaper reclaims it through {@link #lostProc}'s own kill-and-confirm and bounded
+     * deferral if the frame never started.
+     *
+     * A non-positive budget restores the legacy behavior: release immediately with a best-effort
+     * kill.
+     *
+     * @param proc the proc created for the failed dispatch
+     * @param frame the frame the launch was for
+     * @return true if the booking was released (frame WAITING again); false if it was kept
+     */
+    boolean resolveUnknownLaunchOutcome(VirtualProc proc, DispatchFrame frame);
 
     /**
      * Unbooks a proc with no message
