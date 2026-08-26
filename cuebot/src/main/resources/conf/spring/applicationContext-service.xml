@@ -189,6 +189,7 @@
   </bean>
 
   <bean id="dispatchSupport" class="com.imageworks.spcue.dispatcher.DispatchSupportService">
+    <property name="killQueue" ref="killQueue" />
     <property name="dispatcherDao" ref="dispatcherDao" />
     <property name="jobDao" ref="jobDao" />
     <property name="frameDao" ref="frameDao" />

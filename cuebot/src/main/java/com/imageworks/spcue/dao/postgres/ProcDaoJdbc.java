@@ -359,6 +359,29 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
         if (deleted.isEmpty()) {
             return deleted;
         }
+        refundAndCreditDeleted(deleted);
+        return deleted;
+    }
+
+    /**
+     * Host refund + the five accounting-table credits for procs already DELETEd (RETURNING gave
+     * their reserved amounts). One shared block for the drain, the stale-proc evict and the
+     * orphan sweep, so the release paths cannot diverge: any deleted proc credits exactly what
+     * booking debited. Local-dispatch procs take procDestroyed's local branch per proc (they are
+     * rare on these paths and their accounting differs).
+     */
+    private void refundAndCreditDeleted(List<VirtualProc> allDeleted) {
+        List<VirtualProc> deleted = new ArrayList<VirtualProc>(allDeleted.size());
+        for (VirtualProc proc : allDeleted) {
+            if (proc.isLocalDispatch) {
+                procDestroyed(proc);
+            } else {
+                deleted.add(proc);
+            }
+        }
+        if (deleted.isEmpty()) {
+            return;
+        }
 
         // 2. Host idle refunds, summed per host (pure re-increment, never
         // negative). Sorted keys so concurrent releases/reservations walk the
@@ -389,6 +412,12 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
         boolean externalOwns = externalSchedulerOwnsAccounting();
         Map<String, Boolean> managedByShow = new HashMap<String, Boolean>();
         for (VirtualProc proc : deleted) {
+            if (proc.getShowId() == null || proc.getAllocationId() == null
+                    || proc.getLayerId() == null || proc.getJobId() == null) {
+                // A corpse missing accounting keys was never debited to those
+                // tables; the host refund above is all it gets.
+                continue;
+            }
             boolean managed = externalOwns && managedByShow.computeIfAbsent(proc.getShowId(),
                     k -> showDao.isSchedulerManaged(k));
             if (managed) {
@@ -450,7 +479,6 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
                             + "AND pk_show = (SELECT pk_show FROM job WHERE pk_job = ?)",
                     pointRows);
         }
-        return deleted;
     }
 
 
@@ -459,46 +487,57 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
         if (frameIds == null || frameIds.isEmpty()) {
             return java.util.Collections.emptyList();
         }
-        // DELETE .. RETURNING in one statement: the corpse and its held resources
-        // come back together, so eviction and refund cannot diverge.
+        // DELETE .. RETURNING in one statement: the corpse, its held resources
+        // and its accounting keys come back together, so eviction, refund and
+        // credit cannot diverge. The host join supplies the subscription key
+        // (pk_alloc) and the host name for the caller's orphan-render kill.
         String in = String.join(",", java.util.Collections.nCopies(frameIds.size(), "?"));
-        return getJdbcTemplate().query(
-                "DELETE FROM proc WHERE pk_frame IN (" + in + ") "
-                        + "RETURNING pk_proc, pk_host, pk_frame, int_cores_reserved, "
-                        + "int_mem_reserved, int_gpus_reserved, int_gpu_mem_reserved",
-                (rs, rowNum) -> {
-                    VirtualProc proc = new VirtualProc();
-                    proc.id = rs.getString("pk_proc");
-                    proc.hostId = rs.getString("pk_host");
-                    proc.frameId = rs.getString("pk_frame");
-                    proc.coresReserved = rs.getInt("int_cores_reserved");
-                    proc.memoryReserved = rs.getLong("int_mem_reserved");
-                    proc.gpusReserved = rs.getInt("int_gpus_reserved");
-                    proc.gpuMemoryReserved = rs.getLong("int_gpu_mem_reserved");
-                    return proc;
-                }, frameIds.toArray());
+        List<VirtualProc> deleted = getJdbcTemplate().query(
+                "DELETE FROM proc p USING host h WHERE h.pk_host = p.pk_host "
+                        + "AND p.pk_frame IN (" + in + ") "
+                        + "RETURNING p.pk_proc, p.pk_host, p.pk_frame, p.pk_show, p.pk_layer, "
+                        + "p.pk_job, p.b_local, h.pk_alloc, h.str_name, p.int_cores_reserved, "
+                        + "p.int_mem_reserved, p.int_gpus_reserved, p.int_gpu_mem_reserved",
+                DELETED_PROC_MAPPER, frameIds.toArray());
+        refundAndCreditDeleted(deleted);
+        return deleted;
     }
 
     @Override
     public List<VirtualProc> deleteOrphanedProcs(int olderThanSeconds) {
-        return getJdbcTemplate().query(
-                "DELETE FROM proc p USING frame f WHERE f.pk_frame = p.pk_frame "
-                        + "AND f.str_state <> 'RUNNING' "
+        List<VirtualProc> deleted = getJdbcTemplate().query(
+                "DELETE FROM proc p USING frame f, host h WHERE f.pk_frame = p.pk_frame "
+                        + "AND h.pk_host = p.pk_host " + "AND f.str_state <> 'RUNNING' "
                         + "AND p.ts_booked < now() - CAST(? AS INTERVAL) "
-                        + "RETURNING p.pk_proc, p.pk_host, p.pk_frame, p.int_cores_reserved, "
+                        + "RETURNING p.pk_proc, p.pk_host, p.pk_frame, p.pk_show, p.pk_layer, "
+                        + "p.pk_job, p.b_local, h.pk_alloc, h.str_name, p.int_cores_reserved, "
                         + "p.int_mem_reserved, p.int_gpus_reserved, p.int_gpu_mem_reserved",
-                (rs, rowNum) -> {
-                    VirtualProc proc = new VirtualProc();
-                    proc.id = rs.getString("pk_proc");
-                    proc.hostId = rs.getString("pk_host");
-                    proc.frameId = rs.getString("pk_frame");
-                    proc.coresReserved = rs.getInt("int_cores_reserved");
-                    proc.memoryReserved = rs.getLong("int_mem_reserved");
-                    proc.gpusReserved = rs.getInt("int_gpus_reserved");
-                    proc.gpuMemoryReserved = rs.getLong("int_gpu_mem_reserved");
-                    return proc;
-                }, olderThanSeconds + " seconds");
+                DELETED_PROC_MAPPER, olderThanSeconds + " seconds");
+        refundAndCreditDeleted(deleted);
+        return deleted;
     }
+
+    /**
+     * Row mapper for the evict/sweep DELETE .. RETURNING: everything the shared refund+credit
+     * block and the caller's orphan-render kill need.
+     */
+    private static final RowMapper<VirtualProc> DELETED_PROC_MAPPER = (rs, rowNum) -> {
+        VirtualProc proc = new VirtualProc();
+        proc.id = rs.getString("pk_proc");
+        proc.hostId = rs.getString("pk_host");
+        proc.frameId = rs.getString("pk_frame");
+        proc.showId = rs.getString("pk_show");
+        proc.layerId = rs.getString("pk_layer");
+        proc.jobId = rs.getString("pk_job");
+        proc.isLocalDispatch = rs.getBoolean("b_local");
+        proc.allocationId = rs.getString("pk_alloc");
+        proc.hostName = rs.getString("str_name");
+        proc.coresReserved = rs.getInt("int_cores_reserved");
+        proc.memoryReserved = rs.getLong("int_mem_reserved");
+        proc.gpusReserved = rs.getInt("int_gpus_reserved");
+        proc.gpuMemoryReserved = rs.getLong("int_gpu_mem_reserved");
+        return proc;
+    };
 
     @Override
     public void refundHostResourcesBatch(List<VirtualProc> procs) {

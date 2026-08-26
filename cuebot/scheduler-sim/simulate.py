@@ -407,6 +407,7 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "inject_prodenv.py", "prodenv_watch.py",
                      "inject_layercap.py", "layercap_watch.py",
                      "inject_strandgrow.py", "strandgrow_watch.py",
+                     "inject_doublerender.py", "doublerender_watch.py",
                      "health_watch.py",
                      "live_stats.py",
                      "gen_jobs.py", "drain_test.py", "metrics.py", "stats.py",
@@ -1146,6 +1147,13 @@ def start_strandgrow_injector(duration):
           f"{FARM}/inject_strandgrow.log")
 
 
+def start_doublerender_injector(duration):
+    log(f"starting DOUBLERENDER (stale unfenced frame-stop on running "
+        f"frames; real sweep + rebook decide the verdict) for {duration}s ...")
+    spawn(["inject_doublerender.py", str(duration)],
+          f"{FARM}/inject_doublerender.log")
+
+
 def start_layercap_injector(duration):
     log(f"starting LAYERCAP flood (one deep 1-core layer; the cap must stop it "
         f"from blanketing any host, for {duration}s) ...")
@@ -1527,6 +1535,23 @@ def _verify_check(name, gdir, logp, cblog):
                     f"{fm.group(4) if fm else '?'} frames, ctrl max "
                     f"{cm.group(1) if cm else '?'}, peak core util "
                     f"{um.group(1) if um else '?'}%")
+    if name == "DOUBLERENDER":
+        # The watcher's verdict is the whole check: after the injected stale
+        # frame-stop, the swept corpse's render must be killed, not left to
+        # double-render when the frame is booked again. EXPECTED TO FAIL
+        # until the sweep/evict kill lands (fail-first, like STRANDGROW).
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        vm = re.search(r"flips (\d+); old procs swept (\d+); rebooked "
+                       r"(\d+); double launches (\d+); zombie kills (\d+)",
+                       txt)
+        ok = bool(re.search(r"(?m)^PASS:", txt))
+        return ok, (f"stale-stop injection: {vm.group(1) if vm else '?'} "
+                    f"flips, {vm.group(2) if vm else '?'} corpses swept, "
+                    f"{vm.group(4) if vm else '?'} double launches, "
+                    f"{vm.group(5) if vm else '?'} zombie kills")
     if name == "HEALTH":
         # The watcher's verdict is the whole check: every hardware shape
         # reports the planted sickness on the metrics endpoint, and the
@@ -1832,6 +1857,18 @@ def run_verify():
         ("STRANDGROW", ["--hosts", "3,4,10",
                         "--strandgrow-test", str(max(D, 240))],
          {"SIM_RSS_PIN": "simstrandgrow=18"}),
+        # DOUBLERENDER: the release-path defect found by audit. A stale
+        # lostProc (maintenance walking a minutes-old proc list) stops a frame
+        # that was already released and rebooked -- the stop is unfenced, so
+        # the frame flips WAITING while its new host still renders; the orphan
+        # sweep then deletes the new proc with NO kill and the next tick books
+        # the frame elsewhere: two hosts render one frame. The injector
+        # performs the stale stop itself (one SQL statement, cuebot untouched);
+        # sweep, rebook and relaunch are real cuebot code. fake_rqd's DOUBLE
+        # LAUNCH line is the crime, its kill-honored line is the fix.
+        # EXPECTED TO FAIL until the sweep/evict kill (fix b) lands.
+        ("DOUBLERENDER", ["--hosts", "3,4,10",
+                          "--doublerender-test", str(max(D, 240))], {}),
         # HEALTH: the farm-health Prometheus family. The fake farm's pingers
         # report a deterministic sickness (every *0001 host: kernel time 45%,
         # a quarter of its swap spent); the cue_farm_health_* gauges must
@@ -2144,6 +2181,13 @@ def main():
                          "18G -> 5 cores) so the hosts' cores work instead of "
                          "stranding behind exhausted memory; a "
                          "non-threadable control must stay at 1 core.")
+    ap.add_argument("--doublerender-test", type=int, default=0,
+                    metavar="SECS",
+                    help="DOUBLERENDER test: inject the stale unfenced "
+                         "frame-stop (one SQL statement, no cuebot change) "
+                         "on running frames and judge whether the swept "
+                         "corpse render is killed or left to double-"
+                         "render when the frame is booked again.")
     ap.add_argument("--layercap-test", type=int, default=0, metavar="SECS",
                     help="LAYERCAP test: flood one deep 1-core layer and assert "
                          "no host ever holds more than the per-host layer cap "
@@ -2509,6 +2553,8 @@ def main():
         start_layercap_injector(args.layercap_test)
     if args.strandgrow_test:
         start_strandgrow_injector(args.strandgrow_test)
+    if args.doublerender_test:
+        start_doublerender_injector(args.doublerender_test)
     if lic_secs:
         start_license_injector(lic_secs)
     if args.folder_test:
@@ -2534,6 +2580,7 @@ def main():
              or args.limit_test or args.license_test or args.poison_test
              or args.capdrop_test or args.prodenv_test or args.layercap_test
              or args.health_test or args.strandgrow_test
+             or args.doublerender_test
              or args.folder_test or args.locality_test
              or args.depend_test or args.failover_test or args.tag_gpu_test
              or args.tagmax_test
@@ -2573,6 +2620,11 @@ def main():
             f"core grant) for {args.strandgrow_test}s ...")
         subprocess.run([VENV_PY, "strandgrow_watch.py",
                         str(args.strandgrow_test), "5"], cwd=FARM)
+    elif args.doublerender_test:
+        log(f"watching DOUBLERENDER (swept corpse proc vs its still-running "
+            f"render) for {args.doublerender_test}s ...")
+        subprocess.run([VENV_PY, "doublerender_watch.py",
+                        str(args.doublerender_test), "5"], cwd=FARM)
     elif args.health_test:
         log(f"watching HEALTH (cue_farm_health_* vs the planted farm "
             f"sickness) for {args.health_test}s ...")

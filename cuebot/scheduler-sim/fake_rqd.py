@@ -217,6 +217,19 @@ class RqdServicer(rqd_pb2_grpc.RqdInterfaceServicer):
             num_cores=rf.num_cores, start_time=int(time.time()),
             max_rss=peak, rss=peak, max_vsize=peak, vsize=peak)
         with _heap_lock:
+            # Double-render detector: this one server receives every host's
+            # launches, so a launch for a frame whose first copy is still alive
+            # means cuebot booked the same frame twice concurrently (the
+            # release-path defect: a stale frame-stop freed the frame while its
+            # proc's render kept running, and the corpse was swept with no
+            # kill). A real farm would be writing the same output files twice.
+            if rf.frame_id in _alive:
+                old = _alive[rf.frame_id]
+                _stats["double_launch"] = _stats.get("double_launch", 0) + 1
+                print(f"  [rqd] DOUBLE LAUNCH frame={rf.frame_id} "
+                      f"name={rf.job_name}.{rf.frame_name} "
+                      f"old_proc={old.resource_id} new_proc={rf.resource_id}",
+                      flush=True)
             _stats["launched"] += 1
             _stats["core_points"] += rf.num_cores
             _stats["work_cs"] += (max(1, rf.num_cores // 100)) * dur
@@ -234,6 +247,12 @@ class RqdServicer(rqd_pb2_grpc.RqdInterfaceServicer):
         # mutually exclusive with natural completion, so the frame reports once.
         frame = _claim(request.frame_id)
         if frame is not None:
+            # DOUBLERENDER evidence line (token-guarded so no other scenario
+            # gains log noise): a kill honored for a zombie copy is exactly
+            # what the fixed sweep/evict is supposed to send.
+            if "simdoublerender" in (frame.job_name or ""):
+                print(f"  [rqd] kill honored frame={request.frame_id} "
+                      f"proc={frame.resource_id}", flush=True)
             _report_pool.submit(_send_completion, frame, time.time(), True)
         return rqd_pb2.RqdStaticKillRunningFrameResponse()
 

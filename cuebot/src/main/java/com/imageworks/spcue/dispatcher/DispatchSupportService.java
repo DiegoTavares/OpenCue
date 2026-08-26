@@ -65,6 +65,7 @@ import com.imageworks.spcue.grpc.monitoring.ProcEvent;
 import com.imageworks.spcue.grpc.rqd.RunFrame;
 import com.imageworks.spcue.monitoring.KafkaEventPublisher;
 import com.imageworks.spcue.monitoring.MonitoringEventBuilder;
+import com.imageworks.spcue.dispatcher.commands.DispatchRqdKillFrame;
 import com.imageworks.spcue.rqd.RqdClient;
 import com.imageworks.spcue.service.BookingManager;
 import com.imageworks.spcue.service.DependManager;
@@ -84,6 +85,9 @@ public class DispatchSupportService implements DispatchSupport {
     private DependManager dependManager;
     private SubscriptionDao subscriptionDao;
     private RqdClient rqdClient;
+
+    // Shared async kill executor (same bean HostReportHandler uses); may be null in tests.
+    private HostReportQueue killQueue;
     private RedirectManager redirectManager;
     private BookingManager bookingManager;
     private BookingDao bookingDao;
@@ -332,10 +336,15 @@ public class DispatchSupportService implements DispatchSupport {
     public int sweepOrphanedProcs(int olderThanSeconds) {
         List<VirtualProc> orphans = procDao.deleteOrphanedProcs(olderThanSeconds);
         if (!orphans.isEmpty()) {
-            procDao.refundHostResourcesBatch(orphans);
+            // The delete refunded the host and credited the accounting tables.
+            // A swept corpse's render may still be alive; kill it before the
+            // frame is rebooked (the sweep runs before this tick plans).
             StringBuilder sb = new StringBuilder();
             for (VirtualProc p : orphans) {
                 sb.append(' ').append(p.frameId);
+                if (p.frameId != null && p.hostName != null) {
+                    killOrphanRender(p, "orphaned proc swept while its frame was not RUNNING");
+                }
             }
             logger.warn("janitor swept " + orphans.size() + " orphaned proc(s) whose frames are"
                     + " no longer RUNNING (crash or failed completion left them); frames:" + sb);
@@ -424,10 +433,21 @@ public class DispatchSupportService implements DispatchSupport {
         }
         List<VirtualProc> stale = procDao.deleteStaleProcsByFrames(winnerFrameIds);
         if (!stale.isEmpty()) {
-            procDao.refundHostResourcesBatch(stale);
+            // The delete refunded the host and credited the accounting tables.
+            // A corpse from a stale release may still be rendering; kill it,
+            // EXCEPT on a host this batch is booking, where the kill
+            // (addressed host+frame) would hit the fresh run inserted below.
+            java.util.Set<String> bookingHosts = new java.util.HashSet<String>();
+            for (FrameBooking b : winners) {
+                bookingHosts.add(b.proc.getHostId());
+            }
             StringBuilder sb = new StringBuilder();
             for (VirtualProc p : stale) {
                 sb.append(' ').append(p.frameId);
+                if (p.frameId != null && p.hostName != null
+                        && !bookingHosts.contains(p.getHostId())) {
+                    killOrphanRender(p, "stale proc evicted while its frame was rebooked");
+                }
             }
             logger.warn("evicted " + stale.size() + " stale proc(s) blocking this tick's"
                     + " bookings (crash or failed completion left them); frames:" + sb);
@@ -692,20 +712,23 @@ public class DispatchSupportService implements DispatchSupport {
     }
 
     @Transactional(propagation = Propagation.REQUIRED)
-    public void unbookProc(VirtualProc proc) {
-        unbookProc(proc, "was unbooked");
+    public boolean unbookProc(VirtualProc proc) {
+        return unbookProc(proc, "was unbooked");
     }
 
     @Transactional(propagation = Propagation.REQUIRED)
-    public void unbookProc(VirtualProc proc, String reason) {
+    public boolean unbookProc(VirtualProc proc, String reason) {
         if (proc == null) {
-            return;
+            return false;
         }
         if (proc.isNew()) {
-            return;
+            return false;
         }
         proc.unbooked = true;
-        procDao.deleteVirtualProc(proc);
+        // The proc row is the run-identity token: deleting it is how a caller
+        // proves the run was still theirs to release. A false return means
+        // someone else already released (and possibly rebooked) this run.
+        boolean deleted = procDao.deleteVirtualProc(proc);
         publishProcEvent(EventType.PROC_UNBOOKED, proc);
         DispatchSupport.unbookedProcs.getAndIncrement();
         logger.info(proc + " " + reason);
@@ -721,6 +744,7 @@ public class DispatchSupportService implements DispatchSupport {
                 // Eat the exception.
             }
         }
+        return deleted;
     }
 
     @Override
@@ -784,7 +808,21 @@ public class DispatchSupportService implements DispatchSupport {
         // Count the clear only now that the proc is actually being released; deferrals above
         // return early and must not inflate this counter.
         long numCleared = clearedProcs.incrementAndGet();
-        unbookProc(proc, "proc " + proc.getName() + " is #" + numCleared + " cleared: " + reason);
+        boolean unbooked = unbookProc(proc,
+                "proc " + proc.getName() + " is #" + numCleared + " cleared: " + reason);
+
+        /*
+         * Ownership fence: a false return means someone else already released this run and the
+         * frame may have been rebooked. The stop below re-fetches the frame, so its version guard
+         * would pass against the CURRENT run; touch nothing. Crash-stranded frames are reclaimed
+         * by maintenance's orphaned-frame reset.
+         */
+        if (!unbooked) {
+            logger.warn("lostProc: proc " + proc.getName() + " for frame " + proc.frameId
+                    + " was already released by someone else; leaving the frame alone. reason="
+                    + reason);
+            return false;
+        }
 
         if (proc.frameId != null) {
             FrameInterface f = frameDao.getFrame(proc.frameId);
@@ -917,6 +955,32 @@ public class DispatchSupportService implements DispatchSupport {
 
     public void setRqdClient(RqdClient rqdClient) {
         this.rqdClient = rqdClient;
+    }
+
+    public HostReportQueue getKillQueue() {
+        return killQueue;
+    }
+
+    public void setKillQueue(HostReportQueue killQueue) {
+        this.killQueue = killQueue;
+    }
+
+    /**
+     * Best-effort kill for a corpse proc's possibly-still-alive render, enqueued on the shared
+     * kill queue. A crash corpse is dead and the kill is a cheap no-op; a stale-release corpse is
+     * alive, and this keeps it from double-rendering its rebooked frame.
+     */
+    private void killOrphanRender(VirtualProc proc, String reason) {
+        if (killQueue == null) {
+            return;
+        }
+        try {
+            killQueue.execute(new DispatchRqdKillFrame(proc.hostName, proc.frameId,
+                    "orphaned render cleanup: " + reason, rqdClient));
+        } catch (Exception e) {
+            logger.warn("could not enqueue orphan-render kill for frame " + proc.frameId + " on "
+                    + proc.hostName + ": " + e);
+        }
     }
 
     public SubscriptionDao getSubscriptionDao() {

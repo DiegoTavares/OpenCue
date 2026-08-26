@@ -227,13 +227,17 @@ public interface DispatchSupport {
      * Unbooks a proc with no message
      *
      * @param proc
+     * @return true if this call deleted the proc row. False means someone else already released
+     *         this run; the caller owns nothing and must not touch the frame.
      */
-    void unbookProc(VirtualProc proc);
+    boolean unbookProc(VirtualProc proc);
 
     /**
      * Unbooks a virtual proc. Takes a reason which is printed to the console.
+     *
+     * @return true if this call deleted the proc row (see the one-arg overload).
      */
-    void unbookProc(VirtualProc proc, String reason);
+    boolean unbookProc(VirtualProc proc, String reason);
 
     /**
      * Returns the next N frames to be dispatched from the specified job.
