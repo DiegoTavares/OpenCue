@@ -675,7 +675,8 @@ public class FrameDaoTests extends AbstractTransactionalJUnit4SpringContextTests
     public void testUpdateFrameClearedIfRunning() {
         DispatchHost host = createHost();
         JobDetail job = launchJob();
-        FrameDetail frame = frameDao.findFrameDetail(job, "0001-pass_1");
+        // pass_1 depends on pass_1_preprocess, so its frames are DEPEND and cannot be started.
+        FrameDetail frame = frameDao.findFrameDetail(job, "0001-pass_1_preprocess");
 
         VirtualProc proc = new VirtualProc();
         proc.allocationId = host.allocationId;
