@@ -406,6 +406,7 @@ WORKLOAD_PATTERNS = ["feed.py", "inject_big.py", "inject_priority_starve.py",
                      "inject_capdrop.py", "capdrop_watch.py",
                      "inject_prodenv.py", "prodenv_watch.py",
                      "inject_layercap.py", "layercap_watch.py",
+                     "inject_layercap_solo.py", "layercap_solo_watch.py",
                      "inject_strandgrow.py", "strandgrow_watch.py",
                      "inject_doublerender.py", "doublerender_watch.py",
                      "health_watch.py",
@@ -1160,6 +1161,13 @@ def start_layercap_injector(duration):
     spawn(["inject_layercap.py", str(duration)], f"{FARM}/inject_layercap.log")
 
 
+def start_layercap_solo_injector(duration):
+    log(f"starting LAYERCAP_SOLO flood (one deep 1-core layer ALONE; the cap "
+        f"must yield instead of stranding the farm, for {duration}s) ...")
+    spawn(["inject_layercap_solo.py", str(duration)],
+          f"{FARM}/inject_layercap_solo.log")
+
+
 def start_license_server(duration):
     """Bring up the fake license server BEFORE cuebot polls it, so the planner's
     first sample is real rather than a failed fetch."""
@@ -1517,6 +1525,22 @@ def _verify_check(name, gdir, logp, cblog):
                     f"{pm.group(1) if pm else '?'} frames on "
                     f"{pm.group(2) if pm else '?'} hosts, cap violations "
                     f"{vm.group(1) if vm else '?'}")
+    if name == "LAYERCAP_SOLO":
+        # The watcher's verdict is the whole check: alone on the farm, the
+        # layer must go past the per-host cap and use the cores.
+        try:
+            txt = open(logp, errors="ignore").read()
+        except Exception:
+            txt = ""
+        um = re.search(r"peak util ([0-9.]+)%", txt)
+        pm = re.search(r"peak running (\d+) frames across (\d+) hosts", txt)
+        om = re.search(r"cap at peak (\d+)", txt)
+        ok = bool(re.search(r"(?m)^PASS:", txt))
+        return ok, (f"lone flood vs stranding cap: peak util "
+                    f"{um.group(1) if um else '?'}%, "
+                    f"{pm.group(1) if pm else '?'} frames on "
+                    f"{pm.group(2) if pm else '?'} hosts, "
+                    f"{om.group(1) if om else '?'} hosts over cap")
     if name == "STRANDGROW":
         # The watcher's verdict is the whole check: memory-heavy threadable
         # frames book at their metric share, the non-threadable control does
@@ -1838,13 +1862,20 @@ def run_verify():
         # to the procs anyway (no wedge, no negative drift).
         ("CAPDROP", ["--hosts", "3,4,10", "--capdrop-test", str(D)]),
         # LAYERCAP: one deep 1-core layer floods a small farm with the per-host
-        # layer cap on (25% of a host's cores per layer, floor 8 frames). No
-        # host may hold more than its share; the flood must spill across hosts
-        # instead of blanketing one machine (the production 128-on-one pile-up).
-        # --compress 30: long frames, so the flood's concurrency accumulates far
-        # past every cap instead of draining as fast as it books.
-        ("LAYERCAP", ["--hosts", "3,4,10", "--compress", "30",
-                      "--layercap-test", str(D)],
+        # layer cap on (25% of a host's cores per layer, floor 8 frames) while
+        # background jobs keep the farm CONTENDED. No host may give the flood
+        # more than its share while others wait (the production 128-on-one
+        # pile-up). Default compress so background churn keeps real contention
+        # alive for the whole window.
+        ("LAYERCAP", ["--hosts", "3,4,10", "--layercap-test", str(max(D, 240))],
+         {"SIM_LAYER_HOST_MAX_FRAC": "0.25"}),
+        # LAYERCAP_SOLO: the same flood ALONE on an idle farm. The per-host
+        # cap is SOFT: when a fitting host is blocked only by the cap, the
+        # cap yields rather than stranding the machine, or a 25% cap turns a
+        # farm-sized layer into a 25% farm. Fail-first: util plateaus at the
+        # cap while thousands of frames wait.
+        ("LAYERCAP_SOLO", ["--hosts", "3,4,10",
+                           "--layercap-solo-test", str(max(D, 240))],
          {"SIM_LAYER_HOST_MAX_FRAC": "0.25"}),
         # STRANDGROW: 1-core layers whose frames REALLY hold 18G of rss (the
         # fake RQD pins their reported rss; declarations are not trusted). The
@@ -2193,6 +2224,12 @@ def main():
                          "no host ever holds more than the per-host layer cap "
                          "(scheduler.layer_host_max_frac of its cores, floor 8 "
                          "frames), so one layer cannot blanket a machine.")
+    ap.add_argument("--layercap-solo-test", type=int, default=0,
+                    metavar="SECS",
+                    help="LAYERCAP_SOLO test: one deep 1-core layer alone "
+                         "on an idle farm must go past the per-host layer "
+                         "cap (contention rule, nobody waiting) and reach "
+                         "high core utilisation instead of stranding.")
     ap.add_argument("--health-test", type=int, default=0, metavar="SECS",
                     help="HEALTH test: assert the cue_farm_health_* Prometheus "
                          "family reports the fake farm's deterministic health "
@@ -2551,6 +2588,8 @@ def main():
         start_prodenv_injector(args.prodenv_test)
     if args.layercap_test:
         start_layercap_injector(args.layercap_test)
+    if args.layercap_solo_test:
+        start_layercap_solo_injector(args.layercap_solo_test)
     if args.strandgrow_test:
         start_strandgrow_injector(args.strandgrow_test)
     if args.doublerender_test:
@@ -2579,6 +2618,7 @@ def main():
     watch = (args.strand or args.priority_starve or args.priority_spread
              or args.limit_test or args.license_test or args.poison_test
              or args.capdrop_test or args.prodenv_test or args.layercap_test
+             or args.layercap_solo_test
              or args.health_test or args.strandgrow_test
              or args.doublerender_test
              or args.folder_test or args.locality_test
@@ -2615,6 +2655,11 @@ def main():
             f"for {args.layercap_test}s ...")
         subprocess.run([VENV_PY, "layercap_watch.py", str(args.layercap_test), "3"],
                        cwd=FARM)
+    elif args.layercap_solo_test:
+        log(f"watching LAYERCAP_SOLO (lone flood vs the stranding cap) "
+            f"for {args.layercap_solo_test}s ...")
+        subprocess.run([VENV_PY, "layercap_solo_watch.py",
+                        str(args.layercap_solo_test), "5"], cwd=FARM)
     elif args.strandgrow_test:
         log(f"watching STRANDGROW (memory-heavy frames vs the launch-time "
             f"core grant) for {args.strandgrow_test}s ...")

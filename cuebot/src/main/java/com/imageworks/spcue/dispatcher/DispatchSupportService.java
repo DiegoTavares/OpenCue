@@ -152,6 +152,13 @@ public class DispatchSupportService implements DispatchSupport {
 
     @Override
     @Transactional(readOnly = true)
+    public List<DispatchFrame> findNextDispatchFrames(LayerInterface layer, DispatchHost host,
+            int limit, int offset) {
+        return dispatcherDao.findNextDispatchFrames(layer, host, limit, offset);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<DispatchFrame> findNextDispatchFrames(LayerInterface layer, VirtualProc proc,
             int limit) {
         return dispatcherDao.findNextDispatchFrames(layer, proc, limit);

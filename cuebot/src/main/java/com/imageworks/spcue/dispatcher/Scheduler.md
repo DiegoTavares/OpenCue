@@ -650,7 +650,7 @@ already takes most of the load off it.
 | `scheduler.license.env_key` | `CUE_LICENSES` | Layer environment key carrying the license names. |
 | `scheduler.license.denied_exit_statuses` | (empty) | Exit codes meaning "could not get a license": such frames requeue WAITING without spending a retry. |
 | `scheduler.host_limit_seat_bonus` | `16.0` | Score bonus per host_based license pool the host already holds a seat in; packs licensed work onto the fewest machines. |
-| `scheduler.layer_host_max_frac` | `0.25` | Per-host layer cap: one layer may hold at most this fraction of a host's cores (as frames, floor 8), so a flood spills across hosts instead of blanketing one. 0 disables. |
+| `scheduler.layer_host_max_frac` | `0.25` | SOFT per-host layer cap: one layer may hold at most this fraction of a host's cores (as frames, floor 8), so a flood spills across hosts instead of blanketing one. The cap yields when it is the only blocker: a fitting idle host that only the cap refuses is given to the layer (rss-proven layers only), so a lone farm-sized layer fills the farm instead of stranding it. On a busy farm no such host exists and the cap holds. 0 disables. |
 | `scheduler.mem_per_core` | `0` | Memory-per-core ratio (KB) for rss-driven layer sizing (§3.9). 0 (the default) derives it from each group's own hosts; set e.g. 4194304 to pin 4G/core studio-wide. |
 | `dispatcher.job_frame_dispatch_max` | `8` | Max frames of one job booked onto a host per tick. |
 | `dispatcher.host_frame_dispatch_max` | `12` | Max frames booked onto a host per tick. |

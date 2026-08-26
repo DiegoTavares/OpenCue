@@ -438,7 +438,11 @@ public class CoreUnitDispatcher implements Dispatcher {
 
     @Override
     public List<FrameBooking> planHost(DispatchHost host, LayerInterface layer, int effCores,
-            long effMemKb) {
+            long effMemKb, int planOffset, int planLimit) {
+        // The scheduler accounted planLimit frames for this (host, layer) slice;
+        // deliver exactly that. 0 = no slice info: legacy per-call trickle.
+        int bookMax = planLimit > 0 ? planLimit
+                : getIntProperty("dispatcher.job_frame_dispatch_max");
         // Scheduler-native lean read. The planner already loaded this host and
         // already enforced show-burst and job caps in-tick, so we skip the
         // per-frame isShowAtOrOverBurst / isJobBookable DB round-trips the
@@ -448,7 +452,7 @@ public class CoreUnitDispatcher implements Dispatcher {
         List<FrameBooking> bookings = new ArrayList<FrameBooking>();
 
         List<DispatchFrame> frames = dispatchSupport.findNextDispatchFrames(layer, host,
-                getIntProperty("dispatcher.frame_query_max"));
+                Math.max(getIntProperty("dispatcher.frame_query_max"), bookMax), planOffset);
 
         String[] selfishServices =
                 env.getProperty("dispatcher.frame.selfish.services", "").split(",");
@@ -498,7 +502,7 @@ public class CoreUnitDispatcher implements Dispatcher {
             if (!host.hasAdditionalResources(Dispatcher.CORE_POINTS_RESERVED_MIN, MEM_RESERVED_MIN,
                     Dispatcher.GPU_UNITS_RESERVED_MIN, MEM_GPU_RESERVED_MIN)) {
                 break;
-            } else if (bookings.size() >= getIntProperty("dispatcher.job_frame_dispatch_max")) {
+            } else if (bookings.size() >= bookMax) {
                 break;
             } else if (bookings.size() >= getIntProperty("dispatcher.host_frame_dispatch_max")) {
                 break;

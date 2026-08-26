@@ -271,6 +271,13 @@ public interface DispatchSupport {
     List<DispatchFrame> findNextDispatchFrames(LayerInterface layer, DispatchHost host, int limit);
 
     /**
+     * Same, skipping the first {@code offset} dispatchable frames (disjoint slices for parallel
+     * same-layer plans).
+     */
+    List<DispatchFrame> findNextDispatchFrames(LayerInterface layer, DispatchHost host, int limit,
+            int offset);
+
+    /**
      * Return the next N frames to be dispatched from the specified layer.
      *
      * @param layer

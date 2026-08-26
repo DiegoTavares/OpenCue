@@ -238,6 +238,14 @@ public class Scheduler extends JdbcDaoSupport {
     private Map<String, Integer> layerRunningFrames = new HashMap<>();
     // Probe frames planned this tick per unproven layer.
     private final Map<String, Integer> layerProbeUsed = new HashMap<>();
+
+    // Tick-scoped frame-slice bookkeeping for same-layer multi-host planning
+    // (the relax pass): frames planned per layer this tick, and each
+    // (host|layer) plan's {starting offset, size} slice of the layer's
+    // waiting list, so the parallel plan reads pull disjoint frames and
+    // deliver exactly what the scoring accounted.
+    private final Map<String, Integer> plannedFramesByLayer = new HashMap<>();
+    private final Map<String, int[]> planSliceByHostLayer = new HashMap<>();
     // Layers resized from rss evidence this tick: layerId -> {effective core points,
     // effective memory KB}, read by planBookings so the commit books the same shape the
     // planner scored.
@@ -263,8 +271,10 @@ public class Scheduler extends JdbcDaoSupport {
     // (serial within a host so the capacity decrement is correct). Commit is still single/batched.
     private volatile ExecutorService readPool;
 
-    // Max frames one commit books per layer (property dispatcher.job_frame_dispatch_max).
-    private volatile int jobFrameDispatchMax;
+    // Max frames one commit books per layer, also the plan pull size (property
+    // dispatcher.frame_query_max). The legacy job_frame_dispatch_max trickle is not used here:
+    // fairness comes from the lottery and the caps, not from tiny commits.
+    private volatile int frameQueryMax = 20;
     // When false, the planner ignores reservations entirely (no claims, none enforced): the bare
     // placement core, for isolating core scheduling from the reservation logic.
     private volatile boolean reservationsEnabled = true;
@@ -378,8 +388,7 @@ public class Scheduler extends JdbcDaoSupport {
         if (launchPool != null)
             return;
         int launchSize = env.getProperty("scheduler.launch_pool_size", Integer.class, 8);
-        jobFrameDispatchMax =
-                env.getProperty("dispatcher.job_frame_dispatch_max", Integer.class, 8);
+        frameQueryMax = env.getProperty("dispatcher.frame_query_max", Integer.class, 20);
         reservationsEnabled =
                 env.getProperty("scheduler.reservations_enabled", Boolean.class, true);
         reservationBlockMs =
@@ -1378,8 +1387,10 @@ public class Scheduler extends JdbcDaoSupport {
                     // The rss resize the planner scored with, so the commit books the
                     // same shape. {cores, memKb}; absent = book the layer's own ask.
                     long[] rz = layerResize.get(layerId);
+                    int[] slice = planSliceByHostLayer.get(hostId + "|" + layerId);
                     List<FrameBooking> got = dispatcher.planHost(host, layer,
-                            rz != null ? (int) rz[0] : 0, rz != null ? rz[1] : 0);
+                            rz != null ? (int) rz[0] : 0, rz != null ? rz[1] : 0,
+                            slice != null ? slice[0] : 0, slice != null ? slice[1] : 0);
                     if (got.isEmpty()) {
                         int streak = planZeroStreak.merge(layerId, 1, Integer::sum);
                         if (streak % planZeroWarnTicks == 0) {
@@ -1713,6 +1724,8 @@ public class Scheduler extends JdbcDaoSupport {
         layerRunningFrames = new HashMap<>();
         layerProbeUsed.clear();
         layerResize.clear();
+        plannedFramesByLayer.clear();
+        planSliceByHostLayer.clear();
         if (!localityEnabled && layerHostMaxFrac <= 0)
             return affinity;
         getJdbcTemplate().query("SELECT pk_host, pk_layer, COUNT(*) AS n FROM proc "
@@ -2048,6 +2061,7 @@ public class Scheduler extends JdbcDaoSupport {
         for (LayerCandidate c : candidates) {
             seenLayerIds.add(c.layerId);
 
+
             // Cross-group dedup: skip a layer already placed in an earlier host-spec group this
             // tick, whose per-host plan read would pull the same waiting frames and lose the
             // commit-time frame.int_version race. Placed after seenLayerIds.add (so the sweep still
@@ -2128,6 +2142,7 @@ public class Scheduler extends JdbcDaoSupport {
                         break;
                 }
                 BookableHost best = null;
+                BookableHost cappedFallback = null;
                 double bestScore = Double.POSITIVE_INFINITY;
                 for (BookableHost h : hosts) {
                     if (!fitsOnHost(c, h))
@@ -2149,9 +2164,22 @@ public class Scheduler extends JdbcDaoSupport {
                     // Per-host layer cap: a host already holding its share of
                     // this layer takes no more of it; the flood spills to the
                     // next host instead of blanketing this one.
-                    if (layerHostMaxFrac > 0 && hostLayerFrames
-                            .getOrDefault(h.hostId + "|" + c.layerId, 0) >= layerHostCap(h, c))
+                    // One plan per (host, layer) per tick; a pair already
+                    // planned takes its next slice next tick.
+                    if (planSliceByHostLayer.containsKey(h.hostId + "|" + c.layerId))
                         continue;
+                    // SOFT per-host layer cap: prefer hosts under the cap, so
+                    // a flood spreads instead of blanketing one machine. But a
+                    // fitting host blocked ONLY by the cap is remembered: if
+                    // no host is under the cap, the cap yields rather than
+                    // stranding an idle machine. Unproven layers never get
+                    // the fallback (the probe gate is their brake).
+                    if (layerHostMaxFrac > 0 && hostLayerFrames
+                            .getOrDefault(h.hostId + "|" + c.layerId, 0) >= layerHostCap(h, c)) {
+                        if (cappedFallback == null && c.rssProven)
+                            cappedFallback = h;
+                        continue;
+                    }
                     double score = placementScore(h, c);
                     // Locality bonus: prefer a host already running this layer so
                     // a freed core is refilled by the same layer (same-machine
@@ -2193,68 +2221,23 @@ public class Scheduler extends JdbcDaoSupport {
                         best = h;
                     }
                 }
+                boolean overCap = false;
+                if (best == null && cappedFallback != null) {
+                    // Soft cap: the only thing between this layer and an idle
+                    // machine was the cap. Give it the machine.
+                    best = cappedFallback;
+                    overCap = true;
+                }
                 if (best == null)
                     break; // no host can fit this layer
 
                 // Estimate how many frames this commit will book. The
                 // dispatcher books up to job_frame_dispatch_max per call,
                 // bounded by the same fit checks placementScore uses.
-                long maxMore = computeMaxMore(best, c);
-                int estFrames = (int) Math.min(jobFrameDispatchMax, maxMore + 1);
-                // Never dispatch more frames than the layer has waiting, or
-                // the batch commit gets padded with bookings that find
-                // nothing.
-                if (estFrames > c.waitingFrameCount)
-                    estFrames = c.waitingFrameCount;
-                if (estFrames > probeHeadroom)
-                    estFrames = probeHeadroom;
+                int estFrames = headroomFrames(c, best, overCap, probeHeadroom, limitUsed,
+                        licenseUsable, folderUsed);
                 if (estFrames <= 0)
                     break;
-                // Cap the commit to the limit's remaining headroom. The tick-wide
-                // count is authoritative: sibling layers of the same limit may
-                // already have booked against it this tick. If it is now full,
-                // stop booking this layer (its later frames would find nothing).
-                if (c.limitId != null) {
-                    int limHeadroom = c.limitMax - limitUsed.get(c.limitId);
-                    if (limHeadroom <= 0)
-                        break;
-                    if (estFrames > limHeadroom)
-                        estFrames = limHeadroom;
-                }
-                // Cap the commit to the licenses' remaining seats. licenseUsable is
-                // the minimum across the layer's floating pools and is decremented as
-                // this tick books, so sibling layers sharing a pool cannot each
-                // spend it. One frame is one seat.
-                if (licenseUsable != Integer.MAX_VALUE) {
-                    if (licenseUsable <= 0)
-                        break;
-                    if (estFrames > licenseUsable)
-                        estFrames = licenseUsable;
-                }
-                // Cap the commit to the folder's remaining core headroom (this cap
-                // is in cores, not frames). If one more frame's cores won't fit,
-                // stop booking this layer this tick.
-                if (c.folderMax >= 0) {
-                    int folderHeadroom = c.folderMax - folderUsed.get(c.folderId);
-                    if (folderHeadroom < c.layerCoresMin)
-                        break;
-                    int maxByFolder = folderHeadroom / c.layerCoresMin;
-                    if (estFrames > maxByFolder)
-                        estFrames = maxByFolder;
-                }
-                // Cap the commit to the host's remaining share of this layer.
-                // The selection gate keeps hosts already at cap out, so the
-                // remainder here is always positive.
-                if (layerHostMaxFrac > 0) {
-                    int hlCap = layerHostCap(best, c);
-                    if (hlCap != Integer.MAX_VALUE) {
-                        int hlHave = hostLayerFrames.getOrDefault(best.hostId + "|" + c.layerId, 0);
-                        if (estFrames > hlCap - hlHave)
-                            estFrames = hlCap - hlHave;
-                        if (estFrames <= 0)
-                            break;
-                    }
-                }
 
                 int estCores = estFrames * c.layerCoresMin;
                 long estMem = (long) estFrames * c.layerMemMin;
@@ -2316,14 +2299,17 @@ public class Scheduler extends JdbcDaoSupport {
                 // No seize-on-dispatch: reservations are firm (see reservationAllows), so a host
                 // reached here is either its owner booking after the drain or an EASY-backfill
                 // borrow. A borrow never takes ownership, so the reservation is left intact.
-                submitCommit(best.hostId, c.layerId);
+                submitCommit(best.hostId, c.layerId, estFrames);
                 dispatched += estFrames;
                 placed = true;
 
                 // One commit per layer per tick: parallel per-host plan reads
                 // would otherwise grab the same frames (version collisions).
-                // A layer spreads across hosts over a few ticks instead.
-                break;
+                // A layer spreads across hosts over a few ticks instead. Soft-
+                // cap grants keep booking the remaining idle machines: their
+                // plans carry frame-slice offsets, so the reads stay disjoint.
+                if (!overCap)
+                    break;
             }
 
             // Why-not trace: one DEBUG line per candidate that wanted work but
@@ -2703,6 +2689,40 @@ public class Scheduler extends JdbcDaoSupport {
      * because they bound a single dispatch call, not the per-tick total. The dispatch loop applies
      * job_frame_dispatch_max when estimating a single commit's worth of frames.
      */
+    /**
+     * Frames one commit may book for candidate c on host best: the minimum of every sizing rule,
+     * each term named. Zero or less means stop booking this candidate this tick. A soft-cap grant
+     * (overCap) skips the per-host layer-cap term; the cap already yielded for this booking.
+     */
+    private int headroomFrames(LayerCandidate c, BookableHost best, boolean overCap,
+            int probeHeadroom, Map<String, Integer> limitUsed, int licenseUsable,
+            Map<String, Integer> folderUsed) {
+        long maxMore = computeMaxMore(best, c);
+        // Commit size: one plan slice.
+        int est = (int) Math.min(frameQueryMax, maxMore + 1);
+        // Backlog: never book frames the layer does not have.
+        est = Math.min(est, c.waitingFrameCount);
+        // Probe: an unproven layer's remaining farm-wide allowance.
+        est = Math.min(est, probeHeadroom);
+        // Named limit: the tick-wide running count is authoritative.
+        if (c.limitId != null)
+            est = Math.min(est, c.limitMax - limitUsed.get(c.limitId));
+        // Licenses: one frame is one seat, floating pools shared tick-wide.
+        if (licenseUsable != Integer.MAX_VALUE)
+            est = Math.min(est, licenseUsable);
+        // Folder ceiling (cores, not frames).
+        if (c.folderMax >= 0 && c.layerCoresMin > 0)
+            est = Math.min(est, (c.folderMax - folderUsed.get(c.folderId)) / c.layerCoresMin);
+        // Per-host layer cap: skipped when the cap already yielded.
+        if (!overCap && layerHostMaxFrac > 0) {
+            int hlCap = layerHostCap(best, c);
+            if (hlCap != Integer.MAX_VALUE)
+                est = Math.min(est,
+                        hlCap - hostLayerFrames.getOrDefault(best.hostId + "|" + c.layerId, 0));
+        }
+        return est;
+    }
+
     static long computeMaxMore(BookableHost h, LayerCandidate c) {
         long remCores = h.coresIdle - c.layerCoresMin;
         long remMem = h.memIdle - c.layerMemMin;
@@ -2742,9 +2762,14 @@ public class Scheduler extends JdbcDaoSupport {
      * Record a (host, layer) placement to commit at the end of this tick. Planner-thread only;
      * doTick drains plannedByHost via planHost + startFramesAndProcsBatch.
      */
-    private void submitCommit(String hostId, String layerId) {
+    private void submitCommit(String hostId, String layerId, int estFrames) {
         plannedByHost.computeIfAbsent(hostId, k -> new ArrayList<>()).add(layerId);
         placedLayerIds.add(layerId);
+        // Slice bookkeeping: this plan starts where the layer's earlier plans
+        // this tick end, so parallel plan reads pull disjoint frames.
+        planSliceByHostLayer.put(hostId + "|" + layerId,
+                new int[] {plannedFramesByLayer.getOrDefault(layerId, 0), estFrames});
+        plannedFramesByLayer.merge(layerId, estFrames, Integer::sum);
     }
 
     // ---- batched resource accounting: accumulate + flush ------------------

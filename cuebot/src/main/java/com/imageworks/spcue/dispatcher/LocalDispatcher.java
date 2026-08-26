@@ -246,7 +246,7 @@ public class LocalDispatcher extends AbstractDispatcher implements Dispatcher {
 
     @Override
     public List<FrameBooking> planHost(DispatchHost host, LayerInterface layer, int effCores,
-            long effMemKb) {
+            long effMemKb, int planOffset, int planLimit) {
         // The plan/batch-commit path is used only by the in-process Scheduler
         // via CoreUnitDispatcher; local dispatch always commits inline.
         throw new UnsupportedOperationException("planHost is not supported for local dispatch");

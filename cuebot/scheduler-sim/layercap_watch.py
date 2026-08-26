@@ -1,6 +1,8 @@
-"""LAYERCAP verdict: can one layer blanket a machine, or does the cap hold?
+"""LAYERCAP verdict: can one layer blanket a busy machine, or does the cap hold?
 
-Companion to inject_layercap.py (one deep 1-core layer). Samples every host
+Companion to inject_layercap.py (one deep 1-core layer against a saturated
+farm; the cap is a contention rule, and background jobs supply the
+contention -- the idle-farm case where the cap must YIELD is LAYERCAP_SOLO). Samples every host
 running the flood layer and compares its frame count against the reference
 cap: max(FLOOR_FRAMES, frac * host cores / layer cores). The reference frac is
 fixed by the scenario (SIM_LAYERCAP_REF, default 0.25) regardless of what the
@@ -25,7 +27,7 @@ PSQL = spec.psql_cmd()
 TOKEN = "simlayercap"
 REF_FRAC = float(os.environ.get("SIM_LAYERCAP_REF", "0.25"))
 FLOOR_FRAMES = 8
-MIN_PEAK = 100          # flood must reach this many running frames to count
+MIN_PEAK = 60           # flood must reach this many running frames to count
 
 
 def rows(sql):
@@ -44,6 +46,8 @@ def main():
     t0 = time.time()
     peak_running = 0
     peak_hosts = 0
+    peak_bg = 0
+    cap_pinned = 0
     worst_over = 0
     worst_line = ""
     violations = 0
@@ -57,11 +61,17 @@ def main():
         total = sum(int(x[2]) for x in r)
         peak_running = max(peak_running, total)
         peak_hosts = max(peak_hosts, len(r))
+        bg = rows("SELECT count(*) FROM proc p JOIN job j ON j.pk_job = "
+                  "p.pk_job WHERE j.str_name LIKE '%simcapbg%';")
+        peak_bg = max(peak_bg, int(bg[0][0]) if bg else 0)
         top = ""
+        pinned = False
         for name, cores_cp, n in r:
             cores = int(cores_cp) // 100
             cap = max(FLOOR_FRAMES, int(REF_FRAC * cores))
             n = int(n)
+            if n == cap:
+                pinned = True
             if not top:
                 top = f"top {name} {n}/{cap}"
             if n > cap:
@@ -69,6 +79,8 @@ def main():
                 if n - cap > worst_over:
                     worst_over = n - cap
                     worst_line = f"{name} held {n} frames vs cap {cap}"
+        if pinned:
+            cap_pinned += 1
         print(f"t={t:5.0f} | running {total:5d} on {len(r):3d} hosts | {top}"
               f"{'  <-- OVER CAP' if top and violations else ''}", flush=True)
         time.sleep(INTERVAL)
@@ -76,10 +88,18 @@ def main():
     print("\n==== LAYERCAP VERDICT ====", flush=True)
     print(f"peak running {peak_running} frames across {peak_hosts} hosts; "
           f"cap violations {violations}; worst overage {worst_over} frames"
-          f"{' (' + worst_line + ')' if worst_line else ''}", flush=True)
-    if peak_running < MIN_PEAK:
-        print(f"INCONCLUSIVE: the flood peaked at {peak_running} running "
-              f"(under {MIN_PEAK}); the cap was never threatened.", flush=True)
+          f"{' (' + worst_line + ')' if worst_line else ''}; "
+          f"background peak {peak_bg}; cap pinned {cap_pinned} samples",
+          flush=True)
+    if peak_bg < 300:
+        print(f"INCONCLUSIVE: background work peaked at {peak_bg} running "
+              f"frames; the farm was never contended, so the cap holding "
+              f"proves nothing (that is LAYERCAP_SOLO's premise).",
+              flush=True)
+    elif peak_running < MIN_PEAK or cap_pinned < 10:
+        print(f"INCONCLUSIVE: flood peak {peak_running} (need {MIN_PEAK}) "
+              f"with the cap pinned on only {cap_pinned} samples (need 10); "
+              f"the cap was never really pressed.", flush=True)
     elif violations > 0:
         print(f"FAIL: a host exceeded its per-layer share ({worst_line}); "
               f"one layer can still blanket a machine.", flush=True)

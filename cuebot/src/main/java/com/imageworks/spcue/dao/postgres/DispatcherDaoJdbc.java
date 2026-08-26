@@ -453,6 +453,30 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
         return frames;
     }
 
+    // The same layer query over a slice: rows (offset, offset+limit] of the
+    // dispatchable-frame ranking, so parallel same-layer plans on different
+    // hosts pull disjoint frames.
+    private static final String FIND_DISPATCH_FRAME_BY_LAYER_AND_HOST_SLICE =
+            FIND_DISPATCH_FRAME_BY_LAYER_AND_HOST.replace("WHERE LINENUM <= ?",
+                    "WHERE LINENUM > ? AND LINENUM <= ?");
+
+    @Override
+    public List<DispatchFrame> findNextDispatchFrames(LayerInterface layer, DispatchHost host,
+            int limit, int offset) {
+        if (offset <= 0 || host.isLocalDispatch) {
+            return findNextDispatchFrames(layer, host, limit);
+        }
+        long lastTime = System.currentTimeMillis();
+        List<DispatchFrame> frames = getJdbcTemplate().query(
+                FIND_DISPATCH_FRAME_BY_LAYER_AND_HOST_SLICE, FrameDaoJdbc.DISPATCH_FRAME_MAPPER,
+                host.idleCores, host.idleMemory, threadMode(host.threadMode), host.idleGpus,
+                host.idleGpuMemory, layer.getLayerId(), host.getName(), layer.getLayerId(), offset,
+                offset + limit);
+        prometheusMetrics.setBookingDurationMetric("findNextDispatchFrames by layer and host query",
+                System.currentTimeMillis() - lastTime);
+        return frames;
+    }
+
     @Override
     public DispatchFrame findNextDispatchFrame(JobInterface job, VirtualProc proc) {
         return findNextDispatchFrames(job, proc, 1).get(0);
