@@ -107,12 +107,6 @@ public interface DispatchSupport {
     static final AtomicLong bookingErrors = new AtomicLong(0);
 
     /**
-     * A frame launch RPC failed without proving the frame did not start on the host, entering the
-     * confirm-before-release resolution of {@link #resolveUnknownLaunchOutcome}.
-     */
-    static final AtomicLong unknownLaunchOutcomes = new AtomicLong(0);
-
-    /**
      * Long for counting dispatch retries
      */
     static final AtomicLong bookingRetries = new AtomicLong(0);
@@ -207,13 +201,16 @@ public interface DispatchSupport {
      * - Confirmed running: the proc and RUNNING frame are kept; the run finishes through its own
      * frame complete report.
      *
-     * - Confirmed not running (two consecutive polls within
-     * {@code dispatcher.launch_confirm_budget_ms}): the proc is deleted and the frame reset to
-     * WAITING for re-dispatch.
+     * - Confirmed not running by two polls a couple of seconds apart (a single poll would report a
+     * launch the host has received but not started yet as gone): the proc is deleted and the frame
+     * reset to WAITING for re-dispatch through {@link #clearFrame}, whose fence keeps a frame that
+     * started, finished and was reaped during the confirmation (it polls as not running too) from
+     * being re-rendered.
      *
-     * - Unconfirmable (host unreachable, budget expired): fail closed, the booking is kept; the
-     * orphaned-proc reaper reclaims it through {@link #lostProc}'s own kill-and-confirm and bounded
-     * deferral if the frame never started.
+     * - Unconfirmable (host unreachable, or {@code dispatcher.launch_confirm_budget_ms} too small
+     * to fit the second poll): fail closed, the booking is kept; the orphaned-proc reaper reclaims
+     * it through {@link #lostProc}'s own kill-and-confirm and bounded deferral if the frame never
+     * started.
      *
      * A non-positive budget restores the legacy behavior: release immediately with a best-effort
      * kill.
@@ -412,9 +409,16 @@ public interface DispatchSupport {
     /**
      * Sets the frame state to waiting for a frame with no running proc.
      *
+     * The reset is fenced on the frame still being the RUNNING run the caller started, identified
+     * by the version {@link #startFrameAndProc} recorded on the frame. A dispatch that rolled back
+     * before starting the frame, or whose frame has since completed or been re-dispatched, leaves
+     * it untouched: resetting a frame owned by another run frees it for a second booking while that
+     * run is alive.
+     *
      * @param frame
+     * @return true if the frame was reset to waiting, false if it was left alone
      */
-    void clearFrame(DispatchFrame frame);
+    boolean clearFrame(DispatchFrame frame);
 
     /**
      * Sets the frame state exitStatus to EXIT_STATUS_MEMORY_FAILURE

@@ -22,8 +22,10 @@ package com.imageworks.spcue.rqd;
  * Callers must not assume the frame is not running. Releasing the booking without confirming the
  * frame's state re-queues a frame that may already be rendering, double-booking it onto a second
  * host. A plain {@link RqdClientException} from a launch, by contrast, means RQD answered and
- * rejected the launch (or the request was provably never sent), so the frame is known not to be
- * running.
+ * rejected the launch (or the request was provably never sent), so that launch started nothing. The
+ * one rejection that does not mean the frame is idle is RQD refusing a frame it is already running;
+ * see the launch classification in {@link RqdClientGrpc} for why that case is safe to roll back
+ * anyway.
  */
 @SuppressWarnings("serial")
 public class RqdLaunchUnknownOutcomeException extends RqdClientException {

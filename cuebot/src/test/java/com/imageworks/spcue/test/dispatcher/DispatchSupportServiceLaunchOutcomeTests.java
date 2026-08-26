@@ -51,7 +51,10 @@ import static org.mockito.Mockito.when;
 public class DispatchSupportServiceLaunchOutcomeTests {
 
     private static final String BUDGET_PROPERTY = "dispatcher.launch_confirm_budget_ms";
-    private static final long BUDGET_DEFAULT = 10000L;
+    private static final long BUDGET_DEFAULT = 20000L;
+    private static final String POLL_INTERVAL_PROPERTY =
+            "dispatcher.launch_confirm_poll_interval_ms";
+    private static final long POLL_INTERVAL_DEFAULT = 7000L;
 
     private DispatchSupportService dispatchSupport;
     private RqdClient rqdClient;
@@ -80,6 +83,8 @@ public class DispatchSupportServiceLaunchOutcomeTests {
 
         when(env.getProperty(eq(BUDGET_PROPERTY), eq(Long.class), eq(BUDGET_DEFAULT)))
                 .thenReturn(BUDGET_DEFAULT);
+        // Keep the tests fast: the interval only exists to let a delivered launch surface.
+        setPollInterval(1L);
 
         proc = new VirtualProc();
         proc.id = "00000000-0000-0000-0000-000000000001";
@@ -91,11 +96,18 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         frame.name = "0001-test_layer";
 
         when(procDao.deleteVirtualProc(any(VirtualProc.class))).thenReturn(true);
+
+        when(frameDao.updateFrameClearedIfRunning(frame)).thenReturn(true);
     }
 
     private void setBudget(long budgetMs) {
         when(env.getProperty(eq(BUDGET_PROPERTY), eq(Long.class), eq(BUDGET_DEFAULT)))
                 .thenReturn(budgetMs);
+    }
+
+    private void setPollInterval(long pollIntervalMs) {
+        when(env.getProperty(eq(POLL_INTERVAL_PROPERTY), eq(Long.class), eq(POLL_INTERVAL_DEFAULT)))
+                .thenReturn(pollIntervalMs);
     }
 
     @Test
@@ -105,7 +117,7 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         assertFalse(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
 
         verify(procDao, never()).deleteVirtualProc(any(VirtualProc.class));
-        verify(frameDao, never()).updateFrameCleared(any());
+        verify(frameDao, never()).updateFrameClearedIfRunning(any());
         verify(rqdClient, never()).killFrame(any(VirtualProc.class), anyString());
     }
 
@@ -118,8 +130,20 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         // Confirmation requires two polls before the release.
         verify(rqdClient, times(2)).isFrameRunning(proc.hostName, frame.getFrameId());
         verify(procDao, times(1)).deleteVirtualProc(proc);
-        verify(frameDao, times(1)).updateFrameCleared(frame);
+        verify(frameDao, times(1)).updateFrameClearedIfRunning(frame);
         verify(rqdClient, never()).killFrame(any(VirtualProc.class), anyString());
+    }
+
+    @Test
+    public void leavesFrameAloneWhenItCompletedDuringConfirmation() {
+        // The frame ran, finished and was reaped by RQD while we polled: it polls as not running,
+        // but resetting it would re-render finished work.
+        when(rqdClient.isFrameRunning(proc.hostName, frame.getFrameId())).thenReturn(false);
+        when(frameDao.updateFrameClearedIfRunning(frame)).thenReturn(false);
+
+        assertTrue(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
+
+        verify(procDao, times(1)).deleteVirtualProc(proc);
     }
 
     @Test
@@ -131,7 +155,7 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         assertFalse(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
 
         verify(procDao, never()).deleteVirtualProc(any(VirtualProc.class));
-        verify(frameDao, never()).updateFrameCleared(any());
+        verify(frameDao, never()).updateFrameClearedIfRunning(any());
     }
 
     @Test
@@ -142,12 +166,24 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         assertFalse(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
 
         verify(procDao, never()).deleteVirtualProc(any(VirtualProc.class));
-        verify(frameDao, never()).updateFrameCleared(any());
+        verify(frameDao, never()).updateFrameClearedIfRunning(any());
+    }
+
+    @Test
+    public void keepsBookingWhenSecondPollCannotBeConfirmed() {
+        when(rqdClient.isFrameRunning(proc.hostName, frame.getFrameId())).thenReturn(false)
+                .thenThrow(new RqdClientException("host unreachable"));
+
+        assertFalse(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
+
+        verify(procDao, never()).deleteVirtualProc(any(VirtualProc.class));
+        verify(frameDao, never()).updateFrameClearedIfRunning(any());
     }
 
     @Test
     public void keepsBookingWhenBudgetExpiresBeforeConfirmation() {
-        // A 1ms budget cannot fit the second confirmation poll: fail closed.
+        // A budget shorter than the poll interval cannot fit the second poll: fail closed.
+        setPollInterval(10000L);
         setBudget(1L);
         when(rqdClient.isFrameRunning(proc.hostName, frame.getFrameId())).thenReturn(false);
 
@@ -155,7 +191,7 @@ public class DispatchSupportServiceLaunchOutcomeTests {
 
         verify(rqdClient, times(1)).isFrameRunning(proc.hostName, frame.getFrameId());
         verify(procDao, never()).deleteVirtualProc(any(VirtualProc.class));
-        verify(frameDao, never()).updateFrameCleared(any());
+        verify(frameDao, never()).updateFrameClearedIfRunning(any());
     }
 
     @Test
@@ -166,7 +202,7 @@ public class DispatchSupportServiceLaunchOutcomeTests {
 
         verify(rqdClient, never()).isFrameRunning(anyString(), anyString());
         verify(procDao, times(1)).deleteVirtualProc(proc);
-        verify(frameDao, times(1)).updateFrameCleared(frame);
+        verify(frameDao, times(1)).updateFrameClearedIfRunning(frame);
         verify(rqdClient, times(1)).killFrame(eq(proc), anyString());
     }
 
@@ -179,6 +215,6 @@ public class DispatchSupportServiceLaunchOutcomeTests {
         assertTrue(dispatchSupport.resolveUnknownLaunchOutcome(proc, frame));
 
         verify(procDao, times(1)).deleteVirtualProc(proc);
-        verify(frameDao, times(1)).updateFrameCleared(frame);
+        verify(frameDao, times(1)).updateFrameClearedIfRunning(frame);
     }
 }
