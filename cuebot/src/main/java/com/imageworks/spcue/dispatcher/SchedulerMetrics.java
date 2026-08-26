@@ -123,6 +123,29 @@ public class SchedulerMetrics {
                     .help("Worst single host's kernel-time percent in the slice")
                     .labelNames("env", "cuebot_host", "by", "name").register();
 
+    // The locality dial, counted in frames at the booking decision. One
+    // metric answers both localities: live_warm is locality in space (the
+    // chosen host runs the layer right now), cache_warm is locality in time
+    // (the layer left the host but few foreign frames displaced its caches
+    // since), cold is neither. Warm share = warm kinds over the sum.
+    private static final Counter bookedLocality =
+            Counter.build().name("cue_scheduler_booked_frames_locality_total")
+                    .help("Frames booked by cache locality of the chosen host: "
+                            + "live_warm (host already runs the layer), "
+                            + "cache_warm (layer recently left the host, caches likely intact), "
+                            + "cold (no local data; the asset fetch is paid again)")
+                    .labelNames("env", "cuebot_host", "kind").register();
+
+    // The physical counterpart of waiting_frames{reason='no fit'}: idle cores
+    // that exist but that no waiting frame can buy, usually because co-resident
+    // frames ate the host's memory first. SET each tick from the post-plan
+    // snapshot; sustained high values mean the farm's idle is the wrong shape.
+    private static final Gauge farmStrandedCores =
+            Gauge.build().name("cue_farm_health_stranded_cores")
+                    .help("Whole cores idle after planning that no waiting frame can buy "
+                            + "(cores, memory or gpu blocks every candidate on that host)")
+                    .labelNames("env", "cuebot_host").register();
+
     private static final String[] WAIT_REASONS =
             {"flowing", "capacity", "no fit", "limit", "no license", "held"};
     private static final Gauge waitingFrames = Gauge.build().name("cue_scheduler_waiting_frames")
@@ -184,6 +207,7 @@ public class SchedulerMetrics {
             groupsByState.labels(env, host, "inactive").set((double) s.noWork);
             farmCores.labels(env, host).set(s.farmCores);
             runningFrames.labels(env, host).set(s.runningFrames);
+            farmStrandedCores.labels(env, host).set(s.strandedCores);
             incReason("booked", s.booked);
             incReason("no fit", s.noFit);
             incReason("no work", s.noWork);
@@ -201,6 +225,9 @@ public class SchedulerMetrics {
             lastShows.addAll(s.coresByShow.keySet());
             for (Map.Entry<String, Integer> e : s.framesByShow.entrySet())
                 framesDispatched.labels(env, host, e.getKey()).inc(e.getValue());
+            for (Map.Entry<String, Long> e : s.bookedFramesByLocality.entrySet())
+                if (e.getValue() > 0)
+                    bookedLocality.labels(env, host, e.getKey()).inc(e.getValue());
             // Set every reason each tick (0 when absent) so a cause that clears
             // reads 0 rather than pinning its last value.
             for (String reason : WAIT_REASONS)
@@ -259,9 +286,11 @@ public class SchedulerMetrics {
         public int noWork;
         public int queryError;
         public long runningFrames;
+        public long strandedCores;
         public long tickDurationMs;
         public final Map<String, Double> coresByShow = new HashMap<>();
         public final Map<String, Integer> framesByShow = new HashMap<>();
+        public final Map<String, Long> bookedFramesByLocality = new HashMap<>();
         public final Map<String, Long> waitingFramesByReason = new HashMap<>();
         public final Map<String, HealthAgg> healthByGroup = new HashMap<>();
         public final Map<String, HealthAgg> healthByHwtype = new HashMap<>();

@@ -250,6 +250,40 @@ public class SchedulerTests {
         assertEquals("fit", Scheduler.classifyFragmentation(layer(CORE, GB, 1, GB), roomy));
     }
 
+    // ---- strandedWholeCores -----------------------------------------------
+
+    @Test
+    public void strandedCountsIdleCoresNoWaiterCanBuy() {
+        // Memory-stranded host: 8 cores idle but 1G left, so the waiting
+        // 1-core/4G layer cannot buy them. The balanced host next to it sells.
+        Scheduler.BookableHost stranded = loadedHost(32 * CORE, 128 * GB, 8 * CORE, 1 * GB);
+        Scheduler.BookableHost roomy = loadedHost(32 * CORE, 128 * GB, 8 * CORE, 64 * GB);
+        assertEquals(8, Scheduler.strandedWholeCores(Arrays.asList(stranded, roomy),
+                Arrays.asList(layer(CORE, 4 * GB, 0, 0))));
+    }
+
+    @Test
+    public void strandedIsZeroWithoutDemand() {
+        // Idle without anything waiting is just idle, and a candidate whose
+        // backlog drained this tick no longer counts as demand.
+        Scheduler.BookableHost hungry = loadedHost(32 * CORE, 128 * GB, 8 * CORE, 1 * GB);
+        assertEquals(0,
+                Scheduler.strandedWholeCores(Arrays.asList(hungry), new ArrayList<>()));
+        Scheduler.LayerCandidate drained = layer(CORE, 4 * GB, 0, 0);
+        drained.waitingFrameCount = 0;
+        assertEquals(0,
+                Scheduler.strandedWholeCores(Arrays.asList(hungry), Arrays.asList(drained)));
+    }
+
+    @Test
+    public void strandedSkipsSubMinimumSlivers() {
+        // Below CORE_POINTS_RESERVED_MIN nothing can ever be reserved; such
+        // crumbs are a full host's round-off, not stranding.
+        Scheduler.BookableHost sliver = loadedHost(32 * CORE, 128 * GB, 5, 1 * GB);
+        assertEquals(0, Scheduler.strandedWholeCores(Arrays.asList(sliver),
+                Arrays.asList(layer(CORE, 4 * GB, 0, 0))));
+    }
+
     // ---- computeMaxMore ---------------------------------------------------
 
     @Test

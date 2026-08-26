@@ -446,6 +446,17 @@ footprint — hence the `scheduler.locality_window_frames` knob (default 64,
 production data ever shows the average too coarse, the odometer can weight
 each booking by its memory reservation instead of counting 1.
 
+**The dial.** One counter reports both localities in production:
+`cue_scheduler_booked_frames_locality_total{kind}`, counted in planned frames
+at each booking decision from the very signals the bonus scored. `live_warm`
+is locality in space (the chosen host runs the layer right now), `cache_warm`
+is locality in time (the layer left the host but the warmth window still
+holds), `cold` means the asset fetch is paid again. Warm kinds over the sum
+is placement's cache-hit rate — the number the sim's locality watcher
+measures from the outside; with the bonus off the same counter shows the
+accidental rate, the A/B baseline. Like every scheduler stat it issues no
+SQL: three map lookups against the tick's own snapshots.
+
 ---
 
 ### 3.8 The waitlist (what's holding frames)
@@ -469,6 +480,15 @@ filters out at its cap appears only on the ticks churn re-admits it (a fully
 static capped job stays off the panel), and when the same layer is weighed in
 several groups the last group's verdict wins. A `limit` share while cores sit
 idle is the fingerprint of a drifted `job_resource.int_cores` counter.
+
+The `no fit` bucket counts frames; its physical counterpart counts cores:
+`cue_farm_health_stranded_cores` is the whole cores idle after planning that
+no still-waiting candidate can buy (on every such host each candidate is
+stopped by cores, memory or gpu — usually memory, eaten by co-resident
+frames). Counted after the plan so cores that just sold are not blamed, and
+a group with nothing waiting strands nothing: idle without demand is just
+idle. Sustained growth means the farm's idle is the wrong shape for the
+waiting work.
 
 House rule for every scheduler metric: stats gather NO SQL, only live data the
 tick already holds. The waitlist reuses the loop's own verdicts, and the

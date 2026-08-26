@@ -1218,6 +1218,7 @@ public class Scheduler extends JdbcDaoSupport {
         int booked = dispatchGroupWithScoring(idleGroup, fullGroup, candidates, seenLayerIds,
                 jobCoresUsed, showCoresUsed, limitUsed, folderUsed, reservationReqs, tReadyByHost,
                 hostLayerAffinity, licenseBudgets, licenseUsed, licenseSeats);
+        stats.strandedCores += strandedWholeCores(fullGroup, candidates);
         if (booked > 0)
             stats.booked++;
         else
@@ -2239,6 +2240,11 @@ public class Scheduler extends JdbcDaoSupport {
                 if (estFrames <= 0)
                     break;
 
+                // The locality dial: classify the chosen host here, before this
+                // commit moves any of the maps the bonus scored.
+                lastTickStats.bookedFramesByLocality.merge(localityKind(best, c), (long) estFrames,
+                        Long::sum);
+
                 int estCores = estFrames * c.layerCoresMin;
                 long estMem = (long) estFrames * c.layerMemMin;
                 int estGpus = estFrames * c.layerGpusMin;
@@ -2754,6 +2760,60 @@ public class Scheduler extends JdbcDaoSupport {
         if (maxMore == Long.MAX_VALUE)
             maxMore = 0;
         return maxMore;
+    }
+
+    /**
+     * Classify the chosen host for the locality dial, reading the very signals the locality bonus
+     * scored: live_warm when the host runs the layer right now, cache_warm when the layer left it
+     * and fewer than a window of foreign frames displaced its caches since, cold otherwise. Counted
+     * in planned frames at the decision, where the classification is exact; a plan can book fewer
+     * frames than planned, never more. With the bonus off the warmth map is not fed, so cache_warm
+     * reads cold and the dial shows the accidental locality rate, which is the A/B story.
+     */
+    /**
+     * Whole cores idle after this group's plan that no still-waiting candidate can buy: on every
+     * such host each candidate is stopped by cores, memory or gpu. The physical counterpart of the
+     * waitlist's 'no fit' bucket, counted after planning so cores that just sold are not blamed.
+     * A group with nothing waiting strands nothing; idle without demand is just idle.
+     */
+    static long strandedWholeCores(List<BookableHost> hosts, List<LayerCandidate> candidates) {
+        List<LayerCandidate> waiting = new ArrayList<>();
+        for (LayerCandidate c : candidates)
+            if (c.waitingFrameCount > 0)
+                waiting.add(c);
+        if (waiting.isEmpty())
+            return 0;
+        long strandedCp = 0;
+        for (BookableHost h : hosts) {
+            if (h.coresIdle < Dispatcher.CORE_POINTS_RESERVED_MIN)
+                continue;
+            boolean sellable = false;
+            for (LayerCandidate c : waiting) {
+                if (c.layerCoresMin <= h.coresIdle && c.layerMemMin <= h.memIdle
+                        && c.layerGpusMin <= h.gpusIdle && c.layerGpuMemMin <= h.gpuMemIdle) {
+                    sellable = true;
+                    break;
+                }
+            }
+            if (!sellable)
+                strandedCp += h.coresIdle;
+        }
+        return strandedCp / CORE_POINTS_PER_CORE;
+    }
+
+    private String localityKind(BookableHost h, LayerCandidate c) {
+        Set<String> layersHere = hostLayerAffinity.get(h.hostId);
+        if (layersHere != null && layersHere.contains(c.layerId))
+            return "live_warm";
+        if (localityWindowFrames > 0) {
+            Long seen = warmthByHostLayer.get(h.hostId + "|" + c.layerId);
+            if (seen != null) {
+                long foreign = bookingsByHost.getOrDefault(h.hostId, 0L) - seen;
+                if (foreign >= 0 && foreign < localityWindowFrames)
+                    return "cache_warm";
+            }
+        }
+        return "cold";
     }
 
     // ---- plan / batch-commit: submission ----------------------------------

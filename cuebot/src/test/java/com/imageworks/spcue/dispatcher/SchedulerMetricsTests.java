@@ -90,6 +90,7 @@ public class SchedulerMetricsTests {
         s.queryError = 1;
         s.tickDurationMs = 250;
         s.runningFrames = 42;
+        s.strandedCores = 123;
         s.coresByShow.put("smtest_pub", 30.0);
         s.framesByShow.put("smtest_pub", 7);
         m.recordTick(s);
@@ -97,6 +98,7 @@ public class SchedulerMetricsTests {
         assertEquals(5.0, sum("cue_scheduler_groups_total"), 0.0001);
         assertEquals(1000.0, sum("cue_scheduler_farm_cores_total"), 0.0001);
         assertEquals(42.0, sum("cue_scheduler_running_frames"), 0.0001);
+        assertEquals(123.0, sum("cue_farm_health_stranded_cores"), 0.0001);
         assertEquals(bookedBefore + 3.0, sample(pass, "reason", "booked"), 0.0001);
         assertEquals(noFitBefore + 2.0, sample(pass, "reason", "no fit"), 0.0001);
         assertEquals(noWorkBefore + 4.0, sample(pass, "reason", "no work"), 0.0001);
@@ -192,14 +194,38 @@ public class SchedulerMetricsTests {
     }
 
     @Test
+    public void bookedFramesLocalityCountsPerKind() {
+        SchedulerMetrics m = enabledMetrics();
+        String metric = "cue_scheduler_booked_frames_locality_total";
+        double liveBefore = sample(metric, "kind", "live_warm");
+        double cacheBefore = sample(metric, "kind", "cache_warm");
+        double coldBefore = sample(metric, "kind", "cold");
+
+        SchedulerMetrics.TickStats s = new SchedulerMetrics.TickStats();
+        s.bookedFramesByLocality.put("live_warm", 60L);
+        s.bookedFramesByLocality.put("cache_warm", 25L);
+        s.bookedFramesByLocality.put("cold", 15L);
+        m.recordTick(s);
+        m.recordTick(s); // a counter accumulates across ticks
+
+        assertEquals(liveBefore + 120.0, sample(metric, "kind", "live_warm"), 0.0001);
+        assertEquals(cacheBefore + 50.0, sample(metric, "kind", "cache_warm"), 0.0001);
+        assertEquals(coldBefore + 30.0, sample(metric, "kind", "cold"), 0.0001);
+    }
+
+    @Test
     public void disabledCollectorIsNoOp() {
         SchedulerMetrics m = new SchedulerMetrics(new MockEnvironment()); // collector defaults off
+        double coldBefore = sample("cue_scheduler_booked_frames_locality_total", "kind", "cold");
         SchedulerMetrics.TickStats s = new SchedulerMetrics.TickStats();
         s.coresByShow.put("smtest_off", 25.0);
         s.framesByShow.put("smtest_off", 9);
+        s.bookedFramesByLocality.put("cold", 11L);
         m.recordTick(s);
         assertEquals(0.0, sample("cue_scheduler_show_cores", "show", "smtest_off"), 0.0001);
         assertEquals(0.0, sample("cue_scheduler_frames_dispatched_total", "show", "smtest_off"),
                 0.0001);
+        assertEquals(coldBefore,
+                sample("cue_scheduler_booked_frames_locality_total", "kind", "cold"), 0.0001);
     }
 }
