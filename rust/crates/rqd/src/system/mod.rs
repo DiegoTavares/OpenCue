@@ -54,6 +54,39 @@ pub(crate) fn signal_result_tolerating_esrch(
     }
 }
 
+/// Returns whether a process with this pid currently exists (including zombies), probing with
+/// kill(pid, 0) -- deliberately independent of any cached /proc scan, so it stays reliable when
+/// the scan itself is stalled or incomplete. EPERM means the process exists but belongs to
+/// another user, which still counts as alive.
+#[cfg(unix)]
+pub(crate) fn pid_exists(pid: u32) -> bool {
+    match nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None) {
+        Ok(()) => true,
+        Err(nix::errno::Errno::EPERM) => true,
+        Err(_) => false,
+    }
+}
+
+#[cfg(all(test, unix))]
+mod pid_exists_tests {
+    use super::pid_exists;
+
+    #[test]
+    fn own_pid_is_alive() {
+        assert!(pid_exists(std::process::id()));
+    }
+
+    #[test]
+    fn reaped_child_is_gone() {
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn should work");
+        let pid = child.id();
+        child.wait().expect("wait should work");
+        assert!(!pid_exists(pid));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod signal_result_tests {
     use super::signal_result_tolerating_esrch;
