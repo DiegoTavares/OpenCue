@@ -1,0 +1,86 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "550498d6ea46",
+  "session_id": "c3bbc703-b582-498c-8128-f54a44845a4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-28T23:35:53.594768Z",
+  "branch": "joblaunch_missing_limits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cuebot/src/main/java/com/imageworks/spcue/dao/LimitDao.java",
+    "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/LimitDaoJdbc.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/AdminManager.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/AdminManagerService.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/JobLauncher.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/JobManagerService.java",
+    "cuebot/src/test/java/com/imageworks/spcue/test/dao/postgres/LimitDaoTests.java",
+    "cuebot/src/test/java/com/imageworks/spcue/test/service/JobLauncherLimitTests.java"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b88d7c696432",
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 107383,
+    "cache_read_tokens": 3422853,
+    "output_tokens": 27581,
+    "api_call_count": 45
+  },
+  "summary": {
+    "intent": "Investigate what happens when a jobSpec references a cuebot layer limit that doesn't exist, then implement improved error handling so job launch still fails closed but returns a clear exception naming the missing limits.",
+    "outcome": "Delivered a working fix on branch joblaunch_missing_limits: a new LimitDao.findMissingLimitNames query, synchronous pre-launch validation in JobLauncher that throws a descriptive EntityCreationError listing missing limits and their job/layer references, defense-in-depth validation in JobManagerService.addLayerLimits, new tests (JobLauncherLimitTests, LimitDaoTests.testFindMissingLimitNames) all passing, spotless applied, and changes committed.",
+    "learnings": {
+      "repo": [
+        "Layer limit names in a JobSpec are never validated at parse time (JobSpec.java and pyoutline cue.py just collect/serialize the strings) — validation only happened at DB insert time before this change.",
+        "JobManagerService.createJob previously resolved limit names via LimitDao.findLimit per layer, which throws Spring's EmptyResultDataAccessException (an unhelpful raw exception) if the name doesn't exist.",
+        "createJob/launchJobSpec run under @Transactional(REQUIRED), so any exception mid-launch rolls back the entire spec (all jobs/layers/frames), not just the offending layer.",
+        "JobLauncher.launch swallows exceptions from the launch queue thread and calls emailSupport.reportLaunchError instead of surfacing them to the RPC caller — this is why launchSpec (async) previously returned success even though the job silently failed to launch.",
+        "launchSpecAndWait surfaces failures via whiteboard.findJob on a job that was never committed, producing a misleading gRPC INTERNAL 'Incorrect result size: expected 1, actual 0' error unrelated to the real cause.",
+        "AdminManager/AdminManagerService already had a jobLauncher property wired in applicationContext-service.xml, so no new Spring bean wiring was needed to expose limit lookups to JobLauncher.",
+        "pycue only maps a fixed set of gRPC status codes (NOT_FOUND/ALREADY_EXISTS/DEADLINE/INTERNAL/UNAVAILABLE/CANCELLED) to specific exceptions; anything else (e.g. INVALID_ARGUMENT) falls through to a generic CueException, and ManageJob catches generic Exception for all launch failures."
+      ],
+      "code": [
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/service/JobManagerService.java",
+          "line": 280,
+          "end_line": 281,
+          "finding": "createJob previously called limitDao.findLimit(name).getLimitId() per layer limit with no existence check, causing EmptyResultDataAccessException on undefined limits."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/dao/LimitDao.java",
+          "line": 50,
+          "finding": "Added findMissingLimitNames(Collection\u003cString\u003e) to batch-check limit existence via a single WHERE str_name IN (...) query, returning missing names deduped in input order."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/service/JobLauncher.java",
+          "line": 173,
+          "finding": "Added verifyLimits, invoked from verifyJobSpec, which runs synchronously for both queueAndLaunch and launch, so it now rejects the RPC before queueing instead of failing asynchronously."
+        },
+        {
+          "path": "cuebot/src/main/java/com/imageworks/spcue/service/JobManagerService.java",
+          "line": 203,
+          "finding": "Added addLayerLimits as a defense-in-depth check for limits that vanish between spec verification and DB insert, throwing a descriptive JobLaunchException instead of a raw DAO exception."
+        }
+      ],
+      "workflow": [
+        "Traced a bug end-to-end (parsing → service → DAO → transaction → RPC servant → client mapping) before writing any code, which shaped a fix that addressed both the async and sync launch paths.",
+        "Ran spotlessApply before final diff review to keep formatting consistent with project style.",
+        "Verified the fix with targeted test runs (JobManagerTests, JobSpecTests, AdminManagerTests, WhiteboardDaoTests) rather than the full suite, plus new purpose-built tests."
+      ]
+    },
+    "friction": [
+      "The existing failure mode was actively misleading: the async launchSpec RPC returned success while the job silently failed later, and launchSpecAndWait returned an unrelated 'Incorrect result size' gRPC error, both obscuring the true cause (missing limit)."
+    ],
+    "open_items": [
+      "gRPC status for this failure was deliberately left as INTERNAL rather than INVALID_ARGUMENT to avoid breaking pycue's existing exception mapping and changing behavior for other existing errors (show-missing/job-pending); user can request this cleanup as a follow-up."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-28T23:35:32.598739Z",
+    "agent_lines": 281,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 281,
+    "agent_percentage": 100
+  }
+}

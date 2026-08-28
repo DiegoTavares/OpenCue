@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.9",
+  "checkpoint_id": "550498d6ea46",
+  "strategy": "manual-commit",
+  "branch": "joblaunch_missing_limits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "cuebot/src/main/java/com/imageworks/spcue/dao/LimitDao.java",
+    "cuebot/src/main/java/com/imageworks/spcue/dao/postgres/LimitDaoJdbc.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/AdminManager.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/AdminManagerService.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/JobLauncher.java",
+    "cuebot/src/main/java/com/imageworks/spcue/service/JobManagerService.java",
+    "cuebot/src/test/java/com/imageworks/spcue/test/dao/postgres/LimitDaoTests.java",
+    "cuebot/src/test/java/com/imageworks/spcue/test/service/JobLauncherLimitTests.java"
+  ],
+  "sessions": [
+    {
+      "metadata": "/55/0498d6ea46/0/metadata.json",
+      "transcript": "/55/0498d6ea46/0/full.jsonl",
+      "context": "/55/0498d6ea46/0/context.md",
+      "content_hash": "/55/0498d6ea46/0/content_hash.txt",
+      "prompt": "/55/0498d6ea46/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 90,
+    "cache_creation_tokens": 107383,
+    "cache_read_tokens": 3422853,
+    "output_tokens": 27581,
+    "api_call_count": 45
+  }
+}

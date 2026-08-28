@@ -1,0 +1,9 @@
+What happens if a jobSpec links a layer limit that hasn't been defined in cuebot yet?
+
+---
+
+Start a new branch and work on improving the error handling and reporting for this condition. It should keep failing closed, but properly return an exception when trying to create a job for which limits don't exist and report what limits should be created.
+
+---
+
+commit and ush
