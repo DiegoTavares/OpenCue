@@ -71,6 +71,15 @@ public interface LimitDao {
     LimitEntity findLimit(String name);
 
     /**
+     * Returns the subset of the given names that have no matching limit record. Names are returned
+     * in the order they were given, without duplicates.
+     *
+     * @param names
+     * @return names that do not exist
+     */
+    public List<String> findMissingLimitNames(Collection<String> names);
+
+    /**
      * Gets a limit by Id
      *
      * @param id

@@ -296,6 +296,11 @@ public class AdminManagerService implements AdminManager {
     }
 
     @Override
+    public List<String> findMissingLimitNames(Collection<String> names) {
+        return limitDao.findMissingLimitNames(names);
+    }
+
+    @Override
     public LimitInterface getLimit(String id) {
         return limitDao.getLimit(id);
     }
