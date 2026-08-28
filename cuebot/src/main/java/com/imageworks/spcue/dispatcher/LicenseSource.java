@@ -414,8 +414,8 @@ public class LicenseSource {
      *
      * Two different windows, because the two license kinds count different things:
      * <ul>
-     * <li>floating: frames started WITHIN the sample's age, exactly the bookings the license
-     * server has not observed yet.</li>
+     * <li>floating: frames started WITHIN the sample's age, exactly the bookings the license server
+     * has not observed yet.</li>
      * <li>host-based: ALL hosts currently running the license, any age. Seats are a set, so
      * unioning our full host list with the provider's is idempotent and covers providers that
      * report no hosts at all.</li>

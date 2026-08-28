@@ -242,6 +242,19 @@ public class CoreUnitDispatcher implements Dispatcher {
 
     @Override
     public List<VirtualProc> dispatchHost(DispatchHost host, JobInterface job) {
+        return dispatchHostFrames(host, job, "job", () -> dispatchSupport
+                .findNextDispatchFrames(job, host, getIntProperty("dispatcher.frame_query_max")));
+    }
+
+    /**
+     * Shared booking loop behind the per-job and per-layer {@code dispatchHost} variants: check
+     * show burst, run the scoped frame query, then book frames until the host or the dispatch caps
+     * run out. The layer variant passes the layer itself (a LayerInterface is also a JobInterface),
+     * so the burst / job-bookable checks work unchanged for both. {@code scope} only labels the log
+     * lines.
+     */
+    private List<VirtualProc> dispatchHostFrames(DispatchHost host, JobInterface job, String scope,
+            java.util.function.Supplier<List<DispatchFrame>> frameQuery) {
 
         List<VirtualProc> procs = new ArrayList<VirtualProc>();
 
@@ -249,11 +262,10 @@ public class CoreUnitDispatcher implements Dispatcher {
             return procs;
         }
 
-        List<DispatchFrame> frames = dispatchSupport.findNextDispatchFrames(job, host,
-                getIntProperty("dispatcher.frame_query_max"));
+        List<DispatchFrame> frames = frameQuery.get();
 
         logger.info("Frames found: " + frames.size() + " for host " + host.getName() + " "
-                + host.idleCores + "/" + host.idleMemory + " on job " + job.getName());
+                + host.idleCores + "/" + host.idleMemory + " on " + scope + " " + job.getName());
 
         String[] selfishServices =
                 env.getProperty("dispatcher.frame.selfish.services", "").split(",");
@@ -262,7 +274,7 @@ public class CoreUnitDispatcher implements Dispatcher {
             VirtualProc proc = VirtualProc.build(host, frame, selfishServices);
 
             if (frame.minCores <= 0 && !proc.canHandleNegativeCoresRequest) {
-                logger.debug("Cannot dispatch job, host is busy.");
+                logger.debug("Cannot dispatch " + scope + ", host is busy.");
                 break;
             }
 
@@ -318,7 +330,6 @@ public class CoreUnitDispatcher implements Dispatcher {
         }
 
         return procs;
-
     }
 
     public void dispatchProcToJob(VirtualProc proc, JobInterface job) {
@@ -346,89 +357,11 @@ public class CoreUnitDispatcher implements Dispatcher {
 
     @Override
     public List<VirtualProc> dispatchHost(DispatchHost host, LayerInterface layer) {
-
         // Layer-exact dispatch for the Scheduler: book frames of the specific
-        // layer it scored and reserved this host for, not the whole job. This
-        // mirrors dispatchHost(host, job) but scopes the frame query to the
-        // layer; a LayerInterface is also a JobInterface, so the existing
-        // burst / job-bookable checks and dispatch machinery work unchanged.
-        // Kept as a self-contained method so the legacy dispatchHost(host, job)
-        // path is left exactly as-is.
-        List<VirtualProc> procs = new ArrayList<VirtualProc>();
-
-        if (host.strandedCores == 0 && dispatchSupport.isShowAtOrOverBurst(layer, host)) {
-            return procs;
-        }
-
-        List<DispatchFrame> frames = dispatchSupport.findNextDispatchFrames(layer, host,
-                getIntProperty("dispatcher.frame_query_max"));
-
-        logger.info("Frames found: " + frames.size() + " for host " + host.getName() + " "
-                + host.idleCores + "/" + host.idleMemory + " on layer " + layer.getName());
-
-        String[] selfishServices =
-                env.getProperty("dispatcher.frame.selfish.services", "").split(",");
-        for (DispatchFrame frame : frames) {
-
-            VirtualProc proc = VirtualProc.build(host, frame, selfishServices);
-
-            if (frame.minCores <= 0 && !proc.canHandleNegativeCoresRequest) {
-                logger.debug("Cannot dispatch layer, host is busy.");
-                break;
-            }
-
-            if (host.idleCores < host.handleNegativeCoresRequirement(frame.minCores)
-                    || host.idleMemory < frame.getMinMemory() || host.idleGpus < frame.minGpus
-                    || host.idleGpuMemory < frame.minGpuMemory) {
-                logger.debug("Cannot dispatch, insufficient resources.");
-                break;
-            }
-
-            if (!dispatchSupport.isJobBookable(layer, proc.coresReserved, proc.gpusReserved)) {
-                break;
-            }
-
-            if (host.strandedCores == 0 && dispatchSupport.isShowAtOrOverBurst(layer, host)) {
-                return procs;
-            }
-
-            boolean success = new DispatchFrameTemplate(proc, layer, frame, false) {
-                public void wrapDispatchFrame() {
-                    logger.debug("Dispatching frame with " + frame.minCores
-                            + " minCores on proc with " + proc.coresReserved + " coresReserved");
-                    dispatch(frame, proc);
-                    dispatchSummary(proc, frame, "Booking");
-                    return;
-                }
-            }.execute();
-
-            if (success) {
-                procs.add(proc);
-
-                DispatchSupport.bookedProcs.getAndIncrement();
-                DispatchSupport.bookedCores.addAndGet(proc.coresReserved);
-                DispatchSupport.bookedGpus.addAndGet(proc.gpusReserved);
-
-                if (host.strandedCores > 0) {
-                    dispatchSupport.pickupStrandedCores(host);
-                    break;
-                }
-
-                host.useResources(proc.coresReserved, proc.memoryReserved, proc.gpusReserved,
-                        proc.gpuMemoryReserved);
-                if (!host.hasAdditionalResources(Dispatcher.CORE_POINTS_RESERVED_MIN,
-                        MEM_RESERVED_MIN, Dispatcher.GPU_UNITS_RESERVED_MIN,
-                        MEM_GPU_RESERVED_MIN)) {
-                    break;
-                } else if (procs.size() >= getIntProperty("dispatcher.job_frame_dispatch_max")) {
-                    break;
-                } else if (procs.size() >= getIntProperty("dispatcher.host_frame_dispatch_max")) {
-                    break;
-                }
-            }
-        }
-
-        return procs;
+        // layer it scored and reserved this host for, not the whole job, by
+        // scoping the frame query to the layer.
+        return dispatchHostFrames(host, layer, "layer", () -> dispatchSupport
+                .findNextDispatchFrames(layer, host, getIntProperty("dispatcher.frame_query_max")));
     }
 
     @Override
@@ -441,8 +374,8 @@ public class CoreUnitDispatcher implements Dispatcher {
             long effMemKb, int planOffset, int planLimit) {
         // The scheduler accounted planLimit frames for this (host, layer) slice;
         // deliver exactly that. 0 = no slice info: legacy per-call trickle.
-        int bookMax = planLimit > 0 ? planLimit
-                : getIntProperty("dispatcher.job_frame_dispatch_max");
+        int bookMax =
+                planLimit > 0 ? planLimit : getIntProperty("dispatcher.job_frame_dispatch_max");
         // Scheduler-native lean read. The planner already loaded this host and
         // already enforced show-burst and job caps in-tick, so we skip the
         // per-frame isShowAtOrOverBurst / isJobBookable DB round-trips the

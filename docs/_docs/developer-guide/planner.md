@@ -1,3 +1,14 @@
+---
+title: "Planner Scheduler"
+linkTitle: "Planner Scheduler"
+parent: "Developer Guide"
+nav_order: 103
+layout: default
+date: 2026-08-28
+description: >
+  Design and operation of the whole-farm planner scheduler
+---
+
 # Scheduler (Planner)
 
 A whole-farm scheduler for OpenCue, gated behind `scheduler.enabled`
@@ -134,7 +145,7 @@ gpu memory):
 
 | Symbol | Meaning |
 |---|---|
-| `W_D` | weight of dimension `D`; defaults `W_CORES=1`, `W_MEM=1`, `W_GPUS=4`, `W_GPU_MEM=1` |
+| `W_D` | weight of dimension `D`; configurable via `scheduler.score_weight_{cores,mem,gpus,gpu_mem}`, defaults `W_CORES=1`, `W_MEM=1`, `W_GPUS=4`, `W_GPU_MEM=1` |
 | `total_D` | the host's total capacity in `D` |
 | `idle_D` | the host's capacity in `D` not reserved yet |
 | `before_D`, `after_D` | reserved amount in `D` before / after adding this frame |
@@ -145,7 +156,8 @@ We pick the host with the smallest score. Because the exponent is the
 **utilization fraction** `used_D/total_D`, the score is dimensionless and
 free of host-size bias, and the convex `e^x` makes a dimension that is
 already near-full (e.g. a host with idle cores but saturated memory) cost a
-great deal more to load further. Default weights: `W_CORES=1`, `W_MEM=1`,
+great deal more to load further. Default weights (tunable via the
+`scheduler.score_weight_*` properties): `W_CORES=1`, `W_MEM=1`,
 `W_GPUS=4`, `W_GPU_MEM=1`, cores and memory equal; GPUs weighted higher so a
 GPU layer strands the least GPU capacity.
 

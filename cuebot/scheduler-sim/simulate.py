@@ -839,7 +839,7 @@ def start_extra_cuebot(instance, mode, reservations=False, block_seconds=60,
     """Launch an ADDITIONAL cuebot (instance >= 1) from the built jar, on offset
     ports, against the SAME Postgres with scheduler.enabled. All instances race
     for the Postgres advisory lock each tick, so exactly one plans at a time:
-    this is how the sim exercises leader election / HA (Scheduler.md section 4).
+    this is how the sim exercises leader election / HA (planner.md section 4).
 
     Only instance 0 (start_cuebot, via bootRun) is reached by the farm, fake RQD
     and feeder; the extras just join to plan from the shared DB and fire their

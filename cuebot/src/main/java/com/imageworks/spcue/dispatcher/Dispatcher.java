@@ -36,7 +36,7 @@ public interface Dispatcher {
     // The Scheduler places whole-host-sized layers (it tracks contiguous idle
     // cores per host and reserves/drains hosts for wide jobs), so it can honor
     // much wider per-frame reservations than the legacy dispatcher.
-    public static final int CORE_POINTS_RESERVED_MAX_NEW = 6400;
+    public static final int CORE_POINTS_RESERVED_MAX_PLANNER = 6400;
 
     // The default number of core points assigned to a frame, if no core
     // point value is specified

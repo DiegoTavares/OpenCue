@@ -15,13 +15,14 @@ import com.google.common.cache.CacheBuilder;
  * cases:
  *
  * <ul>
- * <li><b>Outlier</b> (one frame OOMs): bump the memory for just THAT frame ({@link #frameBumpKb}),
+ * <li><b>Outlier</b> (scattered OOMs): bump the memory for just THAT frame ({@link #frameBumpKb}),
  * leave the layer alone. The hungry frame climbs on its own; nothing else over-reserves; the bump
  * is transient.</li>
- * <li><b>Systematic</b> (a layer OOMs {@code threshold} times in a row, with no success in
- * between): the layer really is under-sized, so the caller raises the whole layer once. Any success
- * of the layer resets the streak, so scattered or spurious OOMs never reach the threshold and never
- * ratchet the layer.</li>
+ * <li><b>Systematic</b> (a layer accrues {@code threshold} OOMs within the expiry window): the
+ * layer really is under-sized, so the caller raises the whole layer, exactly once per window. Frame
+ * successes do not clear the streak (an under-sized layer with occasional lucky frames must still
+ * escalate); the streak only ages out with the cache expiry. OOMs past the threshold keep taking
+ * the per-frame bump, so recurrences on the raised layer still self-correct.</li>
  * </ul>
  *
  * <p>
@@ -33,15 +34,34 @@ public final class OomMemoryTracker {
 
     public static final OomMemoryTracker INSTANCE = new OomMemoryTracker();
 
-    /** pk_frame -&gt; bumped reserved memory (kB) for that frame's next booking. */
-    private final Cache<String, Long> frameBump = CacheBuilder.newBuilder().maximumSize(200_000)
-            .expireAfterAccess(1, TimeUnit.HOURS).build();
+    /**
+     * Default retention, in hours, of a frame's bump and a layer's streak. Memory-hungry frames
+     * routinely run for several hours, so anything shorter forgets the pattern mid-render.
+     */
+    public static final long DEFAULT_EXPIRE_HOURS = 6;
 
-    /** pk_layer -&gt; consecutive OOM count, reset on any success of the layer. */
-    private final Cache<String, Integer> layerStreak = CacheBuilder.newBuilder()
-            .maximumSize(100_000).expireAfterAccess(1, TimeUnit.HOURS).build();
+    /** pk_frame -&gt; bumped reserved memory (kB) for that frame's next booking. */
+    private volatile Cache<String, Long> frameBump = buildCache(DEFAULT_EXPIRE_HOURS, 200_000);
+
+    /** pk_layer -&gt; OOM count within the expiry window; kept across frame successes. */
+    private volatile Cache<String, Integer> layerStreak = buildCache(DEFAULT_EXPIRE_HOURS, 100_000);
 
     private OomMemoryTracker() {}
+
+    private static <V> Cache<String, V> buildCache(long expireHours, long maxSize) {
+        return CacheBuilder.newBuilder().maximumSize(maxSize)
+                .expireAfterAccess(expireHours, TimeUnit.HOURS).build();
+    }
+
+    /**
+     * Rebuild the caches with the configured expiries. Called once at startup (see
+     * FrameCompleteHandler); any state tracked before the call is discarded, so configure before
+     * traffic.
+     */
+    public synchronized void configure(long frameBumpExpireHours, long layerStreakExpireHours) {
+        frameBump = buildCache(frameBumpExpireHours, 200_000);
+        layerStreak = buildCache(layerStreakExpireHours, 100_000);
+    }
 
     /** Reserved-memory bump (kB) recorded for this frame, or 0 if none. */
     public long frameBumpKb(String frameId) {
@@ -50,35 +70,27 @@ public final class OomMemoryTracker {
     }
 
     /**
-     * Record an OOM. Returns true if the LAYER should be raised (it has OOMed {@code threshold}
-     * times in a row, so it is systematically under-sized); false if the OOM was handled per-frame
-     * (the outlier path).
+     * Record an OOM. Returns true if the LAYER should be raised (it has accrued {@code threshold}
+     * OOMs, so it is systematically under-sized); false if the OOM was handled per-frame (the
+     * outlier path).
      */
     public boolean onOom(String frameId, String layerId, long newReservedKb, int threshold) {
-        // Atomic read-modify-write: several report threads can complete OOM frames
-        // of the SAME layer at once, and a getIfPresent/+1/put would lose
-        // increments (two OOMs counted as one). asMap() is a ConcurrentMap, so
-        // merge() increments the streak atomically.
+        // merge() is atomic and monotonic: concurrent OOMs of the same layer each
+        // get a distinct streak value, so exactly one thread ever sees == threshold.
         int n = layerStreak.asMap().merge(layerId, 1, Integer::sum);
-        if (n >= threshold) {
-            // Escalate exactly once at the boundary: only the thread that removes
-            // the at-threshold mapping raises the layer; a racing thread's remove
-            // fails (value already changed/reset) and it falls through to the
-            // per-frame outlier path instead of raising the layer a second time.
-            if (layerStreak.asMap().remove(layerId, n)) {
-                return true;
-            }
+        if (n == threshold) {
+            return true; // systematic: raise the layer, exactly once
         }
         frameBump.put(frameId, newReservedKb); // outlier: bump just this frame
         return false;
     }
 
     /**
-     * A frame of the layer succeeded: the layer is not systematically broken right now, so forget
-     * the streak and this frame's bump.
+     * A frame of the layer succeeded: forget this frame's bump. The layer's streak is deliberately
+     * kept (a success does not prove the layer is sized right) and only ages out with the cache
+     * expiry.
      */
-    public void onSuccess(String frameId, String layerId) {
-        layerStreak.invalidate(layerId);
+    public void onSuccess(String frameId) {
         frameBump.invalidate(frameId);
     }
 }

@@ -212,6 +212,14 @@ public interface DispatchSupport {
             java.util.List<FrameBooking> bookings);
 
     /**
+     * Publish FRAME_STARTED monitoring events for a batch of committed bookings. Deliberately
+     * separate from {@link #startFramesAndProcsBatch} so the caller invokes it OUTSIDE the commit
+     * transaction: a slow publish (e.g. a Kafka metadata refresh) must never extend the lock window
+     * of the booking commit.
+     */
+    void publishFrameStartedEvents(java.util.List<FrameBooking> winners);
+
+    /**
      * This method clears out a proc that was lost track of. This can happen if the host fails and
      * the proc fails to report in, a network outage occurs, or something of that nature.
      *

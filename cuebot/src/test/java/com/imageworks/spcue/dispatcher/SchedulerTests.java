@@ -267,8 +267,7 @@ public class SchedulerTests {
         // Idle without anything waiting is just idle, and a candidate whose
         // backlog drained this tick no longer counts as demand.
         Scheduler.BookableHost hungry = loadedHost(32 * CORE, 128 * GB, 8 * CORE, 1 * GB);
-        assertEquals(0,
-                Scheduler.strandedWholeCores(Arrays.asList(hungry), new ArrayList<>()));
+        assertEquals(0, Scheduler.strandedWholeCores(Arrays.asList(hungry), new ArrayList<>()));
         Scheduler.LayerCandidate drained = layer(CORE, 4 * GB, 0, 0);
         drained.waitingFrameCount = 0;
         assertEquals(0,
@@ -587,14 +586,13 @@ public class SchedulerTests {
     @Test
     public void metricDerivesFromTheGroupsOwnHosts() {
         // 16 cores / 56G usable = 3.5G per core; an 18G layer sizes to 5.
-        long metric = Scheduler.memPerWholeCoreKb(
-                Arrays.asList(freeHost(1600, 56L * CueUtil.GB, 0, 0)));
+        long metric =
+                Scheduler.memPerWholeCoreKb(Arrays.asList(freeHost(1600, 56L * CueUtil.GB, 0, 0)));
         assertEquals(56L * CueUtil.GB / 16, metric);
         long g18 = 18L * CueUtil.GB;
         Scheduler.LayerCandidate c = grantLayer("hog", true, 100, 0, g18);
         Map<String, long[]> out = new java.util.HashMap<>();
-        Scheduler.resizeFromLiveMem(Arrays.asList(c), seen("hog", g18, g18, g18, g18), metric,
-                out);
+        Scheduler.resizeFromLiveMem(Arrays.asList(c), seen("hog", g18, g18, g18, g18), metric, out);
         assertEquals(500, c.layerCoresMin);
     }
 

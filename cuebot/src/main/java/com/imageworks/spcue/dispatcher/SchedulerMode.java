@@ -27,8 +27,8 @@ import org.springframework.core.env.Environment;
  * <li>{@code no}: Scheduler off; the legacy dispatcher owns every show.</li>
  * <li>{@code facility}: Scheduler plans ALL shows; legacy booking globally suppressed (this is the
  * old {@code scheduler.enabled=true} behaviour).</li>
- * <li>{@code managed}: Scheduler plans only shows flagged {@code b_scheduler_managed=true} (set
- * per show via the show API, exactly like Rust); the legacy dispatcher keeps the rest. The legacy
+ * <li>{@code managed}: Scheduler plans only shows flagged {@code b_scheduler_managed=true} (set per
+ * show via the show API, exactly like Rust); the legacy dispatcher keeps the rest. The legacy
  * dispatch query already excludes managed shows, so the two partition cleanly.</li>
  * </ul>
  *
@@ -38,6 +38,12 @@ import org.springframework.core.env.Environment;
  */
 public final class SchedulerMode {
 
+    private static final org.apache.logging.log4j.Logger logger =
+            org.apache.logging.log4j.LogManager.getLogger(SchedulerMode.class);
+
+    /** Warn about an unrecognized mode string once, not on every report. */
+    private static volatile String warnedUnknownMode = null;
+
     private SchedulerMode() {}
 
     public static String mode(Environment env) {
@@ -45,10 +51,32 @@ public final class SchedulerMode {
         return (m == null || m.trim().isEmpty()) ? "no" : m.trim();
     }
 
-    /** True when the in-process Scheduler runs at all (facility or managed). */
+    /** True when only shows flagged {@code b_scheduler_managed} are planned by the Scheduler. */
+    public static boolean managed(Environment env) {
+        return mode(env).equalsIgnoreCase("managed");
+    }
+
+    /**
+     * True when the in-process Scheduler runs at all (facility or managed). An unrecognized value
+     * counts as {@code no} (legacy dispatcher owns everything) so a config typo can never silently
+     * flip dispatch ownership; it is logged once.
+     */
     public static boolean enabled(Environment env) {
         String m = mode(env);
-        return !(m.equalsIgnoreCase("no") || m.equalsIgnoreCase("false"));
+        if (m.equalsIgnoreCase("no") || m.equalsIgnoreCase("false")) {
+            return false;
+        }
+        if (m.equalsIgnoreCase("facility") || m.equalsIgnoreCase("true")
+                || m.equalsIgnoreCase("managed")) {
+            return true;
+        }
+        if (!m.equals(warnedUnknownMode)) {
+            warnedUnknownMode = m;
+            logger.error("Unrecognized scheduler.enabled value '" + m
+                    + "' (expected no|managed|facility); treating as 'no', the legacy"
+                    + " dispatcher owns every show.");
+        }
+        return false;
     }
 
     /**

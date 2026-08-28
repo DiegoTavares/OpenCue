@@ -25,11 +25,11 @@ import com.imageworks.spcue.grpc.report.FrameCompleteReport;
 
 /**
  * A frame completion report, fully resolved on the RQD report thread and queued for the scheduler's
- * batched flush at the next tick start (see {@link FrameCompleteHandler#flushCompletionBatch}).
- * Everything the flush needs is captured here so the batch never re-reads what the report thread
- * already loaded; in particular {@code frame.getVersion()} is the version observed at arrival,
- * which is what makes the batched stop update lose cleanly (0 rows) if a kill, eat or retry beat
- * the flush to the frame.
+ * batched flush at the next tick start (see
+ * {@link DispatchSupport#stopFramesBatch(java.util.List)}). Everything the flush needs is captured
+ * here so the batch never re-reads what the report thread already loaded; in particular
+ * {@code frame.getVersion()} is the version observed at arrival, which is what makes the batched
+ * stop update lose cleanly (0 rows) if a kill, eat or retry beat the flush to the frame.
  */
 public final class QueuedFrameCompletion {
     public final FrameCompleteReport report;

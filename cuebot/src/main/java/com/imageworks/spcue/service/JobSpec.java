@@ -609,7 +609,7 @@ public class JobSpec {
         boolean schedulerEnabled = SchedulerMode.enabled(env);
         int coreMax = schedulerEnabled
                 ? env.getProperty("dispatcher.frame_cores_max", Integer.class,
-                        Dispatcher.CORE_POINTS_RESERVED_MAX_NEW)
+                        Dispatcher.CORE_POINTS_RESERVED_MAX_PLANNER)
                 : Dispatcher.CORE_POINTS_RESERVED_MAX;
 
         if (corePoints > 0 && corePoints < Dispatcher.CORE_POINTS_RESERVED_MIN) {

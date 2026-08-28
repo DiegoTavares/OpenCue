@@ -326,9 +326,16 @@ public class DispatchSupportService implements DispatchSupport {
             }
         }
         if (!releasable.isEmpty()) {
-            procDao.batchDeleteVirtualProcs(releasable);
+            List<VirtualProc> deleted = procDao.batchDeleteVirtualProcs(releasable);
             for (VirtualProc proc : releasable) {
                 proc.unbooked = true;
+            }
+            // Monitoring: mirror the single-proc release path's PROC_UNBOOKED,
+            // only for procs the DAO really deleted (an already-deleted proc got
+            // its event from whoever deleted it). The publisher hands off to its
+            // own thread pool, so this cannot extend the transaction.
+            for (VirtualProc proc : deleted) {
+                publishProcEvent(EventType.PROC_UNBOOKED, proc);
             }
         }
         if (!localFrames.isEmpty()) {
@@ -465,11 +472,20 @@ public class DispatchSupportService implements DispatchSupport {
         // point counters are batched by the Scheduler from the winners returned here.
         procDao.batchInsertVirtualProcs(winnerProcs);
 
-        // 6. Publish FRAME_STARTED events (WAITING -> RUNNING).
+        // FRAME_STARTED events are published by the caller via
+        // publishFrameStartedEvents, outside this transaction.
+        return winners;
+    }
+
+    @Override
+    public void publishFrameStartedEvents(List<FrameBooking> winners) {
         for (FrameBooking b : winners) {
             publishFrameStartedEvent(b.frame, b.proc, FrameState.WAITING);
+            // The batch insert skips the single-proc book path, so the
+            // PROC_BOOKED counterpart of the drain's PROC_UNBOOKED goes out
+            // here, keeping the proc event stream paired for consumers.
+            publishProcEvent(EventType.PROC_BOOKED, b.proc);
         }
-        return winners;
     }
 
     @Transactional(propagation = Propagation.REQUIRED, readOnly = true)
@@ -821,8 +837,8 @@ public class DispatchSupportService implements DispatchSupport {
         /*
          * Ownership fence: a false return means someone else already released this run and the
          * frame may have been rebooked. The stop below re-fetches the frame, so its version guard
-         * would pass against the CURRENT run; touch nothing. Crash-stranded frames are reclaimed
-         * by maintenance's orphaned-frame reset.
+         * would pass against the CURRENT run; touch nothing. Crash-stranded frames are reclaimed by
+         * maintenance's orphaned-frame reset.
          */
         if (!unbooked) {
             logger.warn("lostProc: proc " + proc.getName() + " for frame " + proc.frameId
@@ -973,9 +989,9 @@ public class DispatchSupportService implements DispatchSupport {
     }
 
     /**
-     * Best-effort kill for a corpse proc's possibly-still-alive render, enqueued on the shared
-     * kill queue. A crash corpse is dead and the kill is a cheap no-op; a stale-release corpse is
-     * alive, and this keeps it from double-rendering its rebooked frame.
+     * Best-effort kill for a corpse proc's possibly-still-alive render, enqueued on the shared kill
+     * queue. A crash corpse is dead and the kill is a cheap no-op; a stale-release corpse is alive,
+     * and this keeps it from double-rendering its rebooked frame.
      */
     private void killOrphanRender(VirtualProc proc, String reason) {
         if (killQueue == null) {

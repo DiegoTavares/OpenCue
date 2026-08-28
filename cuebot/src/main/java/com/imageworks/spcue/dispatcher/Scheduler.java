@@ -68,7 +68,8 @@ import com.imageworks.spcue.service.JobManager;
  * reads fan out on a pool, and every booking for a tick commits in one batched transaction.
  * Persistent reservations hold hosts for blocked wide layers until enough cores free up.
  *
- * Gated by scheduler.enabled (default false). See Scheduler.md for the full model.
+ * Gated by scheduler.enabled (default false). See docs/_docs/developer-guide/planner.md for the
+ * full model.
  */
 public class Scheduler extends JdbcDaoSupport {
 
@@ -79,10 +80,13 @@ public class Scheduler extends JdbcDaoSupport {
 
     // placementScore (E-PVM) dimension weights: relative importance on the util-fraction scale.
     // GPUs weighted up so a GPU layer prefers the host where it strands the least GPU capacity.
-    private static final double W_CORES = 1.0;
-    private static final double W_MEM = 1.0;
-    private static final double W_GPUS = 4.0;
-    private static final double W_GPU_MEM = 1.0;
+    // Sourced from scheduler.score_weight_* in startSchedulerPoolsIfNeeded so they can be tuned
+    // per site without a rebuild.
+    // Static because placementScore is static (pure helper, also unit-tested directly).
+    private static volatile double wCores = 1.0;
+    private static volatile double wMem = 1.0;
+    private static volatile double wGpus = 4.0;
+    private static volatile double wGpuMem = 1.0;
 
     // Locality bonus: subtracted from a host's score when it already runs the candidate's layer, so
     // a freed core is refilled by the same layer next tick. Bounded, below the fit/reservation
@@ -104,7 +108,7 @@ public class Scheduler extends JdbcDaoSupport {
     // frames blanketing one machine, at the price of nibbling more hosts per flood.
     private volatile double layerHostMaxFrac = 0.25;
 
-    // Rss-driven sizing (no configuration, works out of the box; see Scheduler.md 3.9).
+    // Rss-driven sizing (no configuration, works out of the box; see planner.md 3.9).
     // cores=1 on a threadable layer means "let the system decide": such a layer probes at
     // PROBE_FRAMES running frames while the farm has no rss evidence for it, then every
     // later launch books round(median rss / the group's own memory-per-core) cores with
@@ -187,11 +191,11 @@ public class Scheduler extends JdbcDaoSupport {
     private final AtomicBoolean tickInFlight = new AtomicBoolean(false);
 
     // This Cuebot's planning-leadership lock connection, or null when standby. Sticky and raw (not
-    // pooled, so Hikari cannot reap it and drop the lock). See Scheduler.md for the failover model.
+    // pooled, so Hikari cannot reap it and drop the lock). See planner.md for the failover model.
     private volatile Connection leaderConn = null;
 
     // Live host reservations, persistent across ticks: host id -> claiming (layer, priority).
-    // Planner-thread only (single-writer); empty after failover. See Scheduler.md for the model.
+    // Planner-thread only (single-writer); empty after failover. See planner.md for the model.
     private final Map<String, Reservation> reservations = new HashMap<>();
 
     // ---- plan / batch-commit / launch -------------------------------------
@@ -280,7 +284,7 @@ public class Scheduler extends JdbcDaoSupport {
     private volatile boolean reservationsEnabled = true;
 
     // Time gate: blocked-time a layer must accrue before it may reserve (wall-clock).
-    // Property scheduler.reservation_block_seconds. See Scheduler.md for the reservation model.
+    // Property scheduler.reservation_block_seconds. See planner.md for the reservation model.
     private volatile long reservationBlockMs = 300_000; // 5 minutes
     // Capacity gate: reservations hold at most this fraction of the hosts that fit a given layer.
     private volatile double reservationMaxFraction = 0.5;
@@ -368,7 +372,7 @@ public class Scheduler extends JdbcDaoSupport {
     // The legacy per-proc resource UPDATEs serialize on a few hot rows and dominate commit cost at
     // scale. Instead the planner records per-row deltas and flushes one UPDATE per row after the
     // batch commit. Off only when scheduler_manages_resources is true (the Rust scheduler owns the
-    // resource tables then). Set in startSchedulerPoolsIfNeeded. See Scheduler.md section 5.
+    // resource tables then). Set in startSchedulerPoolsIfNeeded. See planner.md section 5.
     private volatile boolean batchResourceAccounting = true;
     // Per-row delta buffers: value is {cores, gpus}. Written on the planner
     // thread when the batch commit's winners are accounted, then drained in
@@ -405,6 +409,10 @@ public class Scheduler extends JdbcDaoSupport {
         // Property name kept from the per-host-limit feature this supersedes, so
         // any site already setting it keeps its value.
         licenseSeatBonus = env.getProperty("scheduler.host_limit_seat_bonus", Double.class, 16.0);
+        wCores = env.getProperty("scheduler.score_weight_cores", Double.class, 1.0);
+        wMem = env.getProperty("scheduler.score_weight_mem", Double.class, 1.0);
+        wGpus = env.getProperty("scheduler.score_weight_gpus", Double.class, 4.0);
+        wGpuMem = env.getProperty("scheduler.score_weight_gpu_mem", Double.class, 1.0);
         // Live application licenses. Started here rather than wired as a bean so its poll thread's
         // life matches the planner's; layers without CUE_LICENSES simply never consult it.
         LicenseSource ls = new LicenseSource(env, getJdbcTemplate());
@@ -457,14 +465,31 @@ public class Scheduler extends JdbcDaoSupport {
      * compute the spec key and run the per-host fit check without a second lookup. The
      * idle/min-core cut happens later, in planGroup.
      */
-    private static final String SELECT_ALL_HOSTS = "SELECT " + "  h.pk_host, " + "  h.str_name, "
-            + "  h.pk_alloc, " + "  a.pk_facility, " + "  h.int_thread_mode, " + "  h.int_cores, "
-            + "  h.int_cores_idle, " + "  h.int_mem, " + "  h.int_mem_idle, " + "  h.int_gpus, "
-            + "  h.int_gpus_idle, " + "  h.int_gpu_mem, " + "  h.int_gpu_mem_idle, "
-            + "  h.int_procs, " + "  h.str_tags, " + "  hs.str_os "
-            + "FROM host h, host_stat hs, alloc a " + "WHERE h.pk_host = hs.pk_host "
-            + "  AND a.pk_alloc = h.pk_alloc " + "  AND hs.str_state = 'UP' "
+    // spotless:off
+    private static final String SELECT_ALL_HOSTS =
+            "SELECT "
+            + "  h.pk_host, "
+            + "  h.str_name, "
+            + "  h.pk_alloc, "
+            + "  a.pk_facility, "
+            + "  h.int_thread_mode, "
+            + "  h.int_cores, "
+            + "  h.int_cores_idle, "
+            + "  h.int_mem, "
+            + "  h.int_mem_idle, "
+            + "  h.int_gpus, "
+            + "  h.int_gpus_idle, "
+            + "  h.int_gpu_mem, "
+            + "  h.int_gpu_mem_idle, "
+            + "  h.int_procs, "
+            + "  h.str_tags, "
+            + "  hs.str_os "
+            + "FROM host h, host_stat hs, alloc a "
+            + "WHERE h.pk_host = hs.pk_host "
+            + "  AND a.pk_alloc = h.pk_alloc "
+            + "  AND hs.str_state = 'UP' "
             + "  AND h.str_lock_state = 'OPEN' ";
+    // spotless:on
 
     /**
      * Candidate layers for a host spec group. One query per group. Filters: - job PENDING and
@@ -477,13 +502,23 @@ public class Scheduler extends JdbcDaoSupport {
      * waiting_frame_count is the number of dispatchable frames on the layer at query time;
      * reconciliation uses it to decide how many hosts the layer should reserve.
      */
-    private static final String SELECT_CANDIDATES_FOR_GROUP = "SELECT " + "  l.pk_layer, "
-            + "  l.pk_job, " + "  j.pk_show, " + "  l.int_cores_min, " + "  l.int_mem_min, "
-            + "  l.b_threadable, " + "  l.int_cores_max, " + "  l.int_gpus_min, "
-            + "  l.int_gpu_mem_min, " + "  jr.int_priority, "
+    // spotless:off
+    private static final String SELECT_CANDIDATES_FOR_GROUP =
+            "SELECT "
+            + "  l.pk_layer, "
+            + "  l.pk_job, "
+            + "  j.pk_show, "
+            + "  l.int_cores_min, "
+            + "  l.int_mem_min, "
+            + "  l.b_threadable, "
+            + "  l.int_cores_max, "
+            + "  l.int_gpus_min, "
+            + "  l.int_gpu_mem_min, "
+            + "  jr.int_priority, "
             + "  jr.int_cores       AS job_cores_in_use, "
             + "  jr.int_max_cores   AS job_max_cores, "
-            + "  sub.int_cores      AS show_cores_in_use, " + "  sub.int_burst      AS show_burst, "
+            + "  sub.int_cores      AS show_cores_in_use, "
+            + "  sub.int_burst      AS show_burst, "
             + "  COALESCE(ls.int_waiting_count, 0) AS waiting_frame_count, "
             + "  COALESCE(lu.int_clock_time_high, 0)     AS clock_time_high, "
             + "  COALESCE(lu.int_frame_success_count, 0) AS frame_success_count, "
@@ -494,18 +529,22 @@ public class Scheduler extends JdbcDaoSupport {
             + "  COALESCE(lu2.int_sum_running, 0) AS limit_running, "
             // Folder (group/dept) core cap: the job's folder, its ceiling, and the
             // folder's current running cores (ground truth = SUM of the folder's jobs).
-            + "  j.pk_folder AS folder_id, " + "  COALESCE(fr.int_max_cores, -1) AS folder_max, "
+            + "  j.pk_folder AS folder_id, "
+            + "  COALESCE(fr.int_max_cores, -1) AS folder_max, "
             // Application licenses the layer declares (CUE_LICENSES), comma
             // separated, NULL when it declares none.
-            + "  le.str_value AS licenses, " + "  COALESCE(fu.folder_cores, 0)   AS folder_running "
-            + "FROM   layer l " + "JOIN   job j           ON j.pk_job  = l.pk_job "
+            + "  le.str_value AS licenses, "
+            + "  COALESCE(fu.folder_cores, 0)   AS folder_running "
+            + "FROM   layer l "
+            + "JOIN   job j           ON j.pk_job  = l.pk_job "
             + "JOIN   job_resource jr ON jr.pk_job = j.pk_job "
             + "JOIN   show sh         ON sh.pk_show = j.pk_show "
             + "JOIN   subscription sub ON sub.pk_show = j.pk_show AND sub.pk_alloc = ? "
             + "LEFT JOIN layer_usage lu ON lu.pk_layer = l.pk_layer "
             + "LEFT JOIN layer_stat  ls ON ls.pk_layer = l.pk_layer "
             // The layer's most-constraining limit (smallest cap), one row per layer.
-            + "LEFT JOIN LATERAL (" + "    SELECT ll.pk_limit_record, lr.int_max_value "
+            + "LEFT JOIN LATERAL ("
+            + "    SELECT ll.pk_limit_record, lr.int_max_value "
             + "    FROM   layer_limit ll "
             + "    JOIN   limit_record lr ON lr.pk_limit_record = ll.pk_limit_record "
             + "    WHERE  ll.pk_layer = l.pk_layer "
@@ -524,7 +563,8 @@ public class Scheduler extends JdbcDaoSupport {
             // boundary, equals SUM(job_resource.int_cores) (one proc per running
             // frame), the figure the folder cap is measured against. Computed once,
             // not per row.
-            + "LEFT JOIN folder_resource fr ON fr.pk_folder = j.pk_folder " + "LEFT JOIN ("
+            + "LEFT JOIN folder_resource fr ON fr.pk_folder = j.pk_folder "
+            + "LEFT JOIN ("
             + "    SELECT j2.pk_folder, "
             + "           SUM(ls2.int_running_count * l2.int_cores_min) AS folder_cores "
             + "    FROM   job j2 "
@@ -546,7 +586,8 @@ public class Scheduler extends JdbcDaoSupport {
             // per tick. At most one row per layer, so this cannot multiply
             // candidates or disturb the ranking below.
             + "LEFT JOIN layer_env le ON le.pk_layer = l.pk_layer AND le.str_key = ? "
-            + "WHERE  j.str_state = 'PENDING' " + "  AND  j.b_paused  = false "
+            + "WHERE  j.str_state = 'PENDING' "
+            + "  AND  j.b_paused  = false "
             // A host may advertise several OSes, comma-separated in
             // host_stat.str_os ("rhel7,rhel9" on mid-migration boxes). The
             // legacy dispatcher expands that into str_os IN ('rhel7','rhel9');
@@ -567,7 +608,8 @@ public class Scheduler extends JdbcDaoSupport {
             // zero frames, and the layer burns its one commit per tick forever.
             + "  AND  (CASE WHEN l.b_threadable = true THEN 1 ELSE 0 END) >= ? "
             + "  AND  ? ~* ('(?x)' || l.str_tags || '\\y') "
-            + "  AND  jr.int_cores  < jr.int_max_cores " + "  AND  sub.int_cores < sub.int_burst "
+            + "  AND  jr.int_cores  < jr.int_max_cores "
+            + "  AND  sub.int_cores < sub.int_burst "
             + "  AND  l.int_cores_min <= ? "
             // Dispatchable-frame test and waiting_frame_count both come from
             // layer_stat.int_waiting_count (maintained by core trigger
@@ -602,8 +644,10 @@ public class Scheduler extends JdbcDaoSupport {
             // random()^(1/priority) (Efraimidis-Spirakis) and we take the top LIMIT, so a
             // low-priority layer keeps a share proportional to its priority instead of being
             // starved by a higher-priority stream. GREATEST(...,1) floors the weight for priority
-            // <= 0. Reservation granting uses the same lottery weighting. See Scheduler.md 3.5.
-            + "ORDER BY power(random(), 1.0 / GREATEST(jr.int_priority, 1)) DESC " + "LIMIT  ? ";
+            // <= 0. Reservation granting uses the same lottery weighting. See planner.md 3.5.
+            + "ORDER BY power(random(), 1.0 / GREATEST(jr.int_priority, 1)) DESC "
+            + "LIMIT  ? ";
+    // spotless:on
 
     // ---- row mappers ------------------------------------------------------
 
@@ -869,13 +913,15 @@ public class Scheduler extends JdbcDaoSupport {
         logger.info(String.format(
                 "Scheduler stat: win=%ds ticks=%d skipped=%d lockLost=%d avgTick=%dms maxTick=%dms"
                         + " | farm hosts=%d idleHosts=%d cores=%d idleCores=%d util=%.1f%% groups=%d"
-                        + " | flow committed=%d planned=%d raceLost=%d launchDropped=%d drained=%d"
+                        + " | flow committed=%d planned=%d raceLost=%d launchDropped=%d drained=%d postQ=%d"
                         + " | resv held=%d reservedCores=%d granted=%d reqs=%d backfilled=%d backfilledCores=%d%s%s",
                 win, summaryTicks, skipped, summaryLockLost, avgTick, summaryMaxTickMs, lastHosts,
                 lastIdleHosts, coresTotal, idleCores, util, lastGroups, summaryDispatched,
-                summaryPlanned, raceLost, droppedInWindow, summaryDrained, reservations.size(),
-                reservedCp / CORE_POINTS_PER_CORE, summaryGranted, lastReservationReqs,
-                summaryBackfilled, summaryBackfilledCores / CORE_POINTS_PER_CORE, lic, waitlist));
+                summaryPlanned, raceLost, droppedInWindow, summaryDrained,
+                frameCompleteHandler == null ? 0 : frameCompleteHandler.getPostCompleteQueueDepth(),
+                reservations.size(), reservedCp / CORE_POINTS_PER_CORE, summaryGranted,
+                lastReservationReqs, summaryBackfilled,
+                summaryBackfilledCores / CORE_POINTS_PER_CORE, lic, waitlist));
 
         lastSummaryMs = nowMs;
         summaryTicks = 0;
@@ -1256,7 +1302,7 @@ public class Scheduler extends JdbcDaoSupport {
      * line; 3. plan each group in priority order against one candidate query per group, placing
      * into the idle subset while a layer that cannot fit collects a reservation request; 4. grant
      * reservations, plan the bookings in parallel, trim to the folder and license limits, commit
-     * the survivors in one batch, and launch them. See Scheduler.md for the full model.
+     * the survivors in one batch, and launch them. See planner.md for the full model.
      *
      * @return frames committed this tick, or -1 for a standby that drained but did not plan.
      */
@@ -1329,6 +1375,9 @@ public class Scheduler extends JdbcDaoSupport {
                 planned.isEmpty() ? java.util.Collections.<FrameBooking>emptyList()
                         : dispatchSupport.startFramesAndProcsBatch(planned);
         long tCommit = System.currentTimeMillis();
+        // Monitoring events go out AFTER the commit transaction so a slow
+        // publish can never extend the booking commit's lock window.
+        dispatchSupport.publishFrameStartedEvents(committed);
         recordCommitted(committed, stats);
         // Publish the ledger AFTER this tick's bookings landed: at this point it
         // holds the procs alive right now (booked minus drained). Filling it at
@@ -1441,15 +1490,15 @@ public class Scheduler extends JdbcDaoSupport {
      * lie, running processes do not, and a single haywire process is one sample and cannot resize
      * the layer. cores = round(rss / memPerCoreKb), never below the ask, never past the layer's
      * max; memory = max(declared, rss) so packing stops trusting an under-declaration too. A layer
-     * with no evidence keeps its ask; when that ask is exactly 1 core ("let the system decide",
-     * the shape nobody sized) it stays rssProven=false, which arms the probe gate in the dispatch
-     * loop: at most {@link #PROBE_FRAMES} of its frames run until the farm has seen it (the
-     * production rss-watcher script's loop, inside the scheduler). An explicit ask of 2+ cores was
-     * sized by someone and books at full speed from frame one. A held layer that has already
-     * completed a probe's worth of frames without ever landing in a report runs too fast to sample
-     * and is released, never starved. Non-threadable layers are never resized (a single-threaded
-     * renderer cannot use the cores). The metric is the group's own memory-per-core, derived from
-     * the machines each tick, never configuration.
+     * with no evidence keeps its ask; when that ask is exactly 1 core ("let the system decide", the
+     * shape nobody sized) it stays rssProven=false, which arms the probe gate in the dispatch loop:
+     * at most {@link #PROBE_FRAMES} of its frames run until the farm has seen it (the production
+     * rss-watcher script's loop, inside the scheduler). An explicit ask of 2+ cores was sized by
+     * someone and books at full speed from frame one. A held layer that has already completed a
+     * probe's worth of frames without ever landing in a report runs too fast to sample and is
+     * released, never starved. Non-threadable layers are never resized (a single-threaded renderer
+     * cannot use the cores). The metric is the group's own memory-per-core, derived from the
+     * machines each tick, never configuration.
      */
     static void resizeFromLiveMem(List<LayerCandidate> candidates, LayerLiveMem liveMem,
             long memPerCoreKb, Map<String, long[]> resizeOut) {
@@ -1764,8 +1813,13 @@ public class Scheduler extends JdbcDaoSupport {
      * shows up as hasSub=false instead of an invisible row; each column mirrors its production
      * clause (os = ANY of the host's comma-separated list, facility bind, smallest-cap limit).
      */
-    private static final String EXPLAIN_GROUP_EXCLUSIONS = "SELECT " + "  j.str_name AS job_name, "
-            + "  l.str_name AS layer_name, " + "  l.str_tags, " + "  jr.int_priority, "
+    // spotless:off
+    private static final String EXPLAIN_GROUP_EXCLUSIONS =
+            "SELECT "
+            + "  j.str_name AS job_name, "
+            + "  l.str_name AS layer_name, "
+            + "  l.str_tags, "
+            + "  jr.int_priority, "
             + "  (? ~* ('(?x)' || l.str_tags || '\\y'))               AS tag_ok, "
             + "  (j.str_os IS NULL OR j.str_os = '' "
             + "   OR j.str_os = ANY(string_to_array(?, ',')))         AS os_ok, "
@@ -1776,7 +1830,8 @@ public class Scheduler extends JdbcDaoSupport {
             + "  (jr.int_cores < jr.int_max_cores)                    AS under_job_cap, "
             + "  (l.int_cores_min <= ?)                               AS fits_cores, "
             + "  (COALESCE(ls.int_waiting_count, 0) > 0)              AS has_waiting, "
-            + "  (NOT EXISTS (" + "     SELECT 1 FROM layer_limit ll "
+            + "  (NOT EXISTS ("
+            + "     SELECT 1 FROM layer_limit ll "
             + "     JOIN limit_record lr ON lr.pk_limit_record = ll.pk_limit_record "
             + "     WHERE ll.pk_layer = l.pk_layer "
             + "       AND (SELECT COALESCE(SUM(ls2.int_running_count), 0) FROM layer_limit ll2 "
@@ -1790,14 +1845,18 @@ public class Scheduler extends JdbcDaoSupport {
             + "       WHERE j3.pk_folder = j.pk_folder AND j3.str_state = 'PENDING') "
             + "      + l.int_cores_min <= fr.int_max_cores)           AS folder_ok, "
             + "  (? OR sh.b_scheduler_managed = true)                 AS managed_ok "
-            + "FROM layer l " + "JOIN job j            ON j.pk_job = l.pk_job "
+            + "FROM layer l "
+            + "JOIN job j            ON j.pk_job = l.pk_job "
             + "JOIN job_resource jr  ON jr.pk_job = j.pk_job "
             + "JOIN show sh          ON sh.pk_show = j.pk_show "
             + "LEFT JOIN subscription sub ON sub.pk_show = j.pk_show AND sub.pk_alloc = ? "
             + "LEFT JOIN layer_stat ls    ON ls.pk_layer = l.pk_layer "
             + "LEFT JOIN folder_resource fr ON fr.pk_folder = j.pk_folder "
             + "WHERE j.str_state = 'PENDING' AND j.b_paused = false "
-            + "ORDER BY jr.int_priority DESC " + "LIMIT " + EXPLAIN_LIMIT;
+            + "ORDER BY jr.int_priority DESC "
+            + "LIMIT "
+            + EXPLAIN_LIMIT;
+    // spotless:on
 
     /** Log the explain rows for a group that produced no candidates. DEBUG-gated by the caller. */
     private void explainGroupExclusions(HostSpecKey spec, int maxCoresTotalInGroup) {
@@ -2655,7 +2714,7 @@ public class Scheduler extends JdbcDaoSupport {
      * dimensions of each dimension's convex cost rise from adding one frame (see deltaCost).
      * Because the terms are e^(used/total), an already-full dimension (idle cores behind saturated
      * memory) costs far more, and the utilization-fraction exponent keeps the score size-unbiased
-     * so big hosts are not starved. We pick the host with the smallest score. See Scheduler.md for
+     * so big hosts are not starved. We pick the host with the smallest score. See planner.md for
      * the derivation and the farm-balancing properties.
      *
      * One-step lookahead: the cost adds just this frame, not an end-of-tick projection. The
@@ -2663,10 +2722,10 @@ public class Scheduler extends JdbcDaoSupport {
      * its own, with no computeMaxMore pile-up estimate needed here.
      */
     static double placementScore(BookableHost h, LayerCandidate c) {
-        return W_CORES * deltaCost(h.coresTotal, h.coresIdle, c.layerCoresMin)
-                + W_MEM * deltaCost(h.memTotal, h.memIdle, c.layerMemMin)
-                + W_GPUS * deltaCost(h.gpusTotal, h.gpusIdle, c.layerGpusMin)
-                + W_GPU_MEM * deltaCost(h.gpuMemTotal, h.gpuMemIdle, c.layerGpuMemMin);
+        return wCores * deltaCost(h.coresTotal, h.coresIdle, c.layerCoresMin)
+                + wMem * deltaCost(h.memTotal, h.memIdle, c.layerMemMin)
+                + wGpus * deltaCost(h.gpusTotal, h.gpusIdle, c.layerGpusMin)
+                + wGpuMem * deltaCost(h.gpuMemTotal, h.gpuMemIdle, c.layerGpuMemMin);
     }
 
     /**
@@ -2773,8 +2832,8 @@ public class Scheduler extends JdbcDaoSupport {
     /**
      * Whole cores idle after this group's plan that no still-waiting candidate can buy: on every
      * such host each candidate is stopped by cores, memory or gpu. The physical counterpart of the
-     * waitlist's 'no fit' bucket, counted after planning so cores that just sold are not blamed.
-     * A group with nothing waiting strands nothing; idle without demand is just idle.
+     * waitlist's 'no fit' bucket, counted after planning so cores that just sold are not blamed. A
+     * group with nothing waiting strands nothing; idle without demand is just idle.
      */
     static long strandedWholeCores(List<BookableHost> hosts, List<LayerCandidate> candidates) {
         List<LayerCandidate> waiting = new ArrayList<>();

@@ -21,8 +21,9 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.logging.log4j.Logger;
@@ -156,6 +157,19 @@ public class FrameCompleteHandler {
             logger.info("license-denied exit statuses (requeued without spending a retry): "
                     + licenseDeniedStatuses);
         }
+        OomMemoryTracker.INSTANCE.configure(
+                env.getProperty("dispatcher.oom_frame_bump_expire_hours", Long.class,
+                        OomMemoryTracker.DEFAULT_EXPIRE_HOURS),
+                env.getProperty("dispatcher.oom_streak_expire_hours", Long.class,
+                        OomMemoryTracker.DEFAULT_EXPIRE_HOURS));
+        int postCompleteQueueSize =
+                env.getProperty("scheduler.post_complete_queue_size", Integer.class, 10000);
+        postCompleteExecutor = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<Runnable>(postCompleteQueueSize), r -> {
+                    Thread t = new Thread(r, "CompletionPostOps");
+                    t.setDaemon(true);
+                    return t;
+                }, new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
     /** Parse a comma separated list of exit statuses, ignoring blanks and junk. */
@@ -211,11 +225,22 @@ public class FrameCompleteHandler {
 
         // Scheduler-owned show: resolve here, apply in the tick (see header).
         if (SchedulerMode.enabled(env)) {
-            QueuedFrameCompletion resolved = resolveForDrain(report);
-            if (resolved == null) {
-                return;
+            QueuedFrameCompletion resolved;
+            boolean schedulerOwned;
+            try {
+                resolved = resolveForDrain(report);
+                if (resolved == null) {
+                    return;
+                }
+                schedulerOwned = SchedulerMode.schedules(env, showDao, resolved.proc.getShowId());
+            } catch (Exception e) {
+                // Same retry contract as processReportNow: a transient resolve
+                // failure must reach RQD as a retry signal, never as a raw
+                // runtime exception over gRPC.
+                throw new RqdRetryReportException("error resolving the frame complete "
+                        + "report for the scheduler drain, sending retry message to RQD " + e, e);
             }
-            if (SchedulerMode.schedules(env, showDao, resolved.proc.getShowId())) {
+            if (schedulerOwned) {
                 SchedulerCompletionQueue.offer(resolved);
                 return;
             }
@@ -265,14 +290,13 @@ public class FrameCompleteHandler {
      * resources refunded), so the follow-up work per frame (depend satisfaction, layer/job
      * completion checks, usage counters) can lag a little without hurting anyone; running it inside
      * the tick would multiply the tick time by the completion rate, and putting it on dispatchQueue
-     * would let load-shedding silently drop depend satisfaction (a job then hangs forever). An
-     * unbounded single-thread queue drops nothing and stays ordered.
+     * would let load-shedding silently drop depend satisfaction (a job then hangs forever). The
+     * queue is bounded (scheduler.post_complete_queue_size) with a caller-runs overflow policy:
+     * nothing is ever dropped, but a sustained backlog turns into back-pressure on the drain
+     * instead of unbounded heap growth. Queue depth is reported on the Scheduler stat line.
+     * Initialized in the constructor (needs env for the bound).
      */
-    private final ExecutorService postCompleteExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "CompletionPostOps");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ThreadPoolExecutor postCompleteExecutor;
 
     /**
      * Queue a drained (already stopped) completion's follow-up work on the post-complete worker.
@@ -326,16 +350,16 @@ public class FrameCompleteHandler {
     /**
      * Process one completion report to the end: stop the frame, then run the post-complete
      * operations. Legacy-owned shows enter here straight from the report thread; for
-     * scheduler-owned shows the drain calls this only as its per-report retry after a failed
-     * batch chunk.
+     * scheduler-owned shows the drain calls this only as its per-report retry after a failed batch
+     * chunk.
      *
-     * Post-complete work runs INLINE for scheduler-owned shows, and in test mode (the test
-     * thread's transaction must observe the writes). There is no rebook decision to defer, the
-     * Scheduler simply plans the freed cores next tick, and an async hop would leave the proc in
-     * limbo holding cores until the queued task ran. If the post-complete work throws, the proc
-     * is released anyway: an orphaned proc (proc row alive, frame back to WAITING) wedges the
-     * planner's batch commit permanently. Legacy shows and Rust (dispatcher.turn_off_booking)
-     * keep the async dispatchQueue hop, which defers the rebook-or-release decision.
+     * Post-complete work runs INLINE for scheduler-owned shows, and in test mode (the test thread's
+     * transaction must observe the writes). There is no rebook decision to defer, the Scheduler
+     * simply plans the freed cores next tick, and an async hop would leave the proc in limbo
+     * holding cores until the queued task ran. If the post-complete work throws, the proc is
+     * released anyway: an orphaned proc (proc row alive, frame back to WAITING) wedges the
+     * planner's batch commit permanently. Legacy shows and Rust (dispatcher.turn_off_booking) keep
+     * the async dispatchQueue hop, which defers the rebook-or-release decision.
      */
     public void processReportNow(final FrameCompleteReport report) {
 
@@ -547,10 +571,10 @@ public class FrameCompleteHandler {
                 jobManager.optimizeLayer(frame, report.getFrame().getNumCores(),
                         report.getFrame().getMaxRss(), report.getRunTime());
                 if (SchedulerMode.enabled(env)) {
-                    // With the in-process Scheduler, a success means the layer is not
-                    // systematically under-sized now, so reset its OOM streak and this
-                    // frame's bump.
-                    OomMemoryTracker.INSTANCE.onSuccess(frame.getFrameId(), frame.getLayerId());
+                    // With the in-process Scheduler, a success clears this frame's
+                    // per-frame OOM bump. The layer's OOM streak is deliberately
+                    // kept (see OomMemoryTracker.onSuccess).
+                    OomMemoryTracker.INSTANCE.onSuccess(frame.getFrameId());
                 }
             }
 
@@ -570,9 +594,9 @@ public class FrameCompleteHandler {
             /*
              * Some exit statuses indicate that a frame was killed by the application due to a
              * memory issue and should be retried, by raising the memory (service override, service,
-             * or 2GB). The legacy dispatcher raises the whole LAYER and disables its optimizer
-             * (the original behavior, kept unchanged). The in-process Scheduler instead bumps per
-             * FRAME so one hungry or spuriously-killed frame does not inflate every other frame and
+             * or 2GB). The legacy dispatcher raises the whole LAYER and disables its optimizer (the
+             * original behavior, kept unchanged). The in-process Scheduler instead bumps per FRAME
+             * so one hungry or spuriously-killed frame does not inflate every other frame and
              * strand cores, escalating to the layer only after repeated OOMs in a row (see
              * OomMemoryTracker).
              */
@@ -980,6 +1004,26 @@ public class FrameCompleteHandler {
     public synchronized void shutdown() {
         logger.info("Shutting down FrameCompleteHandler.");
         shutdown = true;
+        // Drain queued post-complete work (depend satisfaction, completion
+        // checks) before the JVM exits; the worker is a daemon thread, so
+        // without this the queue's contents would be silently abandoned and
+        // downstream frames would wait on a maintenance sweep.
+        postCompleteExecutor.shutdown();
+        long drainMs = env.getProperty("healthy_threadpool.shutdown_drain_ms", Long.class, 60000L);
+        try {
+            if (!postCompleteExecutor.awaitTermination(drainMs, TimeUnit.MILLISECONDS)) {
+                logger.warn("post-complete worker did not drain within " + drainMs + "ms; "
+                        + postCompleteExecutor.getQueue().size() + " queued operations abandoned"
+                        + " (recovered later by the depend maintenance sweep).");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Depth of the post-complete work queue, reported on the Scheduler stat line. */
+    public int getPostCompleteQueueDepth() {
+        return postCompleteExecutor.getQueue().size();
     }
 
     public HostManager getHostManager() {

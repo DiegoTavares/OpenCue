@@ -209,18 +209,39 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
     // for the whole aggregated share (the four ">= ?" guards). A host without room
     // matches 0 rows instead of going negative, so the verify_host_resources
     // trigger never fires and the batched tick is never aborted.
-    private static final String RESERVE_HOST_RESOURCES_GUARDED = "UPDATE host SET "
-            + "int_cores_idle = int_cores_idle - ?, int_mem_idle = int_mem_idle - ?, "
-            + "int_gpus_idle = int_gpus_idle - ?, int_gpu_mem_idle = int_gpu_mem_idle - ? "
-            + "WHERE pk_host = ? AND int_cores_idle >= ? AND int_mem_idle >= ? "
-            + "AND int_gpus_idle >= ? AND int_gpu_mem_idle >= ?";
+    // spotless:off
+    private static final String RESERVE_HOST_RESOURCES_GUARDED =
+            "UPDATE host "
+            + "SET "
+                + "int_cores_idle = int_cores_idle - ?, "
+                + "int_mem_idle = int_mem_idle - ?, "
+                + "int_gpus_idle = int_gpus_idle - ?, "
+                + "int_gpu_mem_idle = int_gpu_mem_idle - ? "
+            + "WHERE "
+                + "pk_host = ? "
+            + "AND "
+                + "int_cores_idle >= ? "
+            + "AND "
+                + "int_mem_idle >= ? "
+            + "AND "
+                + "int_gpus_idle >= ? "
+            + "AND "
+                + "int_gpu_mem_idle >= ?";
+    // spotless:on
 
     // Release resources reserved for procs that were not booked after all (pure
     // re-increment, so it can never drive idle negative).
-    private static final String REFUND_HOST_RESOURCES = "UPDATE host SET "
-            + "int_cores_idle = int_cores_idle + ?, int_mem_idle = int_mem_idle + ?, "
-            + "int_gpus_idle = int_gpus_idle + ?, int_gpu_mem_idle = int_gpu_mem_idle + ? "
-            + "WHERE pk_host = ?";
+    // spotless:off
+    private static final String REFUND_HOST_RESOURCES =
+            "UPDATE host "
+            + "SET "
+                + "int_cores_idle = int_cores_idle + ?, "
+                + "int_mem_idle = int_mem_idle + ?, "
+                + "int_gpus_idle = int_gpus_idle + ?, "
+                + "int_gpu_mem_idle = int_gpu_mem_idle + ? "
+            + "WHERE "
+                + "pk_host = ?";
+    // spotless:on
 
     @Override
     public void batchInsertVirtualProcs(List<VirtualProc> procs) {
@@ -365,10 +386,10 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
 
     /**
      * Host refund + the five accounting-table credits for procs already DELETEd (RETURNING gave
-     * their reserved amounts). One shared block for the drain, the stale-proc evict and the
-     * orphan sweep, so the release paths cannot diverge: any deleted proc credits exactly what
-     * booking debited. Local-dispatch procs take procDestroyed's local branch per proc (they are
-     * rare on these paths and their accounting differs).
+     * their reserved amounts). One shared block for the drain, the stale-proc evict and the orphan
+     * sweep, so the release paths cannot diverge: any deleted proc credits exactly what booking
+     * debited. Local-dispatch procs take procDestroyed's local branch per proc (they are rare on
+     * these paths and their accounting differs).
      */
     private void refundAndCreditDeleted(List<VirtualProc> allDeleted) {
         List<VirtualProc> deleted = new ArrayList<VirtualProc>(allDeleted.size());
@@ -518,8 +539,8 @@ public class ProcDaoJdbc extends JdbcDaoSupport implements ProcDao {
     }
 
     /**
-     * Row mapper for the evict/sweep DELETE .. RETURNING: everything the shared refund+credit
-     * block and the caller's orphan-render kill need.
+     * Row mapper for the evict/sweep DELETE .. RETURNING: everything the shared refund+credit block
+     * and the caller's orphan-render kill need.
      */
     private static final RowMapper<VirtualProc> DELETED_PROC_MAPPER = (rs, rowNum) -> {
         VirtualProc proc = new VirtualProc();
