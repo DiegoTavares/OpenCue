@@ -387,9 +387,14 @@ impl FrameManager {
 
                     Ok(Some(()))
                 }
-                KillOutcome::NotStarted => Err(miette!(
-                    "Frame {running_frame} has been created but hasn't started yet"
-                )),
+                KillOutcome::Scheduled => {
+                    info!(
+                        "Kill request for {running_frame} arrived before its process spawned; \
+                        the kill is recorded and will be applied as soon as it starts.\n\
+                        Reason: {reason}"
+                    );
+                    Ok(Some(()))
+                }
                 KillOutcome::AlreadyTerminated(msg) => {
                     info!(
                         "Kill request for {running_frame} found nothing running to kill: {msg}"
@@ -436,9 +441,13 @@ impl FrameManager {
                             ),
                         }
                     }
-                    KillOutcome::NotStarted => warn!(
-                        "kill_all skipping frame {running_frame}: created but not started yet"
-                    ),
+                    KillOutcome::Scheduled => {
+                        info!(
+                            "kill_all recorded a pending kill for {running_frame}: created but \
+                            not started yet"
+                        );
+                        count += 1;
+                    }
                     KillOutcome::AlreadyTerminated(msg) => {
                         info!("kill_all skipping frame {running_frame}: {msg}")
                     }
