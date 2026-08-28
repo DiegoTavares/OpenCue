@@ -310,12 +310,27 @@ impl MachineMonitor {
                         }
                     }
                     _ = interval.tick() => {
-                        self.collect_and_send_host_report().await?;
+                        // Errors here must never break the loop: a host that stops reporting
+                        // while its frames keep rendering gets marked DOWN by Cuebot and all of
+                        // its frames re-booked (double-renders). Log and retry on the next tick.
+                        if let Err(err) = self.collect_and_send_host_report().await {
+                            error!(
+                                "Failed to collect and send host report, will retry on the \
+                                next cycle: {err}"
+                            );
+                        }
                         self.check_reboot_flag().await;
 
                         #[cfg(feature = "nimby")]
                         if let Some(nimby) = &*self.nimby {
-                            last_lock_state = self.handle_nimby_state_change(nimby, last_lock_state).await?;
+                            match self.handle_nimby_state_change(nimby, last_lock_state).await {
+                                Ok(state) => last_lock_state = state,
+                                Err(err) => error!(
+                                    "Failed to handle nimby state change, keeping state {:?} \
+                                    and retrying on the next cycle: {err}",
+                                    last_lock_state
+                                ),
+                            }
                         }
                 }
 
