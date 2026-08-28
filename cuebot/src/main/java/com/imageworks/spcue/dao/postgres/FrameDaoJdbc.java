@@ -18,11 +18,14 @@ package com.imageworks.spcue.dao.postgres;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.List;
 import java.sql.Timestamp;
 import java.util.Optional;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.support.JdbcDaoSupport;
@@ -41,6 +44,7 @@ import com.imageworks.spcue.dao.FrameDao;
 import com.imageworks.spcue.dao.criteria.FrameSearchInterface;
 import com.imageworks.spcue.dispatcher.Dispatcher;
 import com.imageworks.spcue.dispatcher.FrameReservationException;
+import com.imageworks.spcue.dispatcher.LayerDelayRules;
 import com.imageworks.spcue.grpc.depend.DependType;
 import com.imageworks.spcue.grpc.job.CheckpointState;
 import com.imageworks.spcue.grpc.job.FrameExitStatus;
@@ -54,6 +58,30 @@ import com.imageworks.spcue.util.FrameSet;
 import com.imageworks.spcue.util.SqlUtil;
 
 public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
+
+    /**
+     * Exit statuses that do not consume a retry when the frame is next started: hardware or
+     * dispatch conditions not attributable to the frame itself, plus any statuses configured for
+     * automatic layer backoff (dispatcher.layer_delay.rules).
+     *
+     * The layer_delay half of this list is deliberately coupled to
+     * {@link com.imageworks.spcue.dispatcher.FrameCompleteHandler}, which parses the same property
+     * to decide which statuses send a frame back to WAITING and delay its layer. Both sides read
+     * dispatcher.layer_delay.rules through {@link LayerDelayRules#parse}; keep them reading the
+     * same property, or a delayed frame will silently burn its retries here.
+     */
+    private final Integer[] retryExclusions;
+
+    @Autowired
+    public FrameDaoJdbc(Environment env) {
+        List<Integer> exclusions = new ArrayList<Integer>(Arrays.asList(-1,
+                FrameExitStatus.SKIP_RETRY_VALUE, FrameExitStatus.FAILED_LAUNCH_VALUE,
+                Dispatcher.EXIT_STATUS_FRAME_CLEARED, Dispatcher.EXIT_STATUS_FRAME_ORPHAN,
+                Dispatcher.EXIT_STATUS_FAILED_KILL, Dispatcher.EXIT_STATUS_DOWN_HOST));
+        exclusions.addAll(LayerDelayRules.parse(env.getProperty("dispatcher.layer_delay.rules", ""))
+                .keySet());
+        this.retryExclusions = exclusions.toArray(new Integer[0]);
+    }
 
     // spotless:off
     private static final String UPDATE_FRAME_STOPPED_NORSS =
@@ -133,9 +161,28 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
         return updateFrame(frame, Dispatcher.EXIT_STATUS_DOWN_HOST) > 0;
     }
 
+    // spotless:off
+    private static final String UPDATE_FRAME_CLEARED_IF_RUNNING =
+            "UPDATE frame "
+            + "SET "
+                + "str_state = ?, "
+                + "int_exit_status = ?, "
+                + "ts_stopped = current_timestamp, "
+                + "ts_updated = current_timestamp, "
+                + "int_version = int_version + 1 "
+            + "WHERE frame.pk_frame = ? "
+            + "AND frame.str_state = ? "
+            + "AND frame.int_version = ? "
+            + "AND frame.pk_frame NOT IN "
+                + "(SELECT proc.pk_frame FROM proc WHERE proc.pk_frame=?)";
+    // spotless:on
+
     @Override
-    public boolean updateFrameCleared(FrameInterface frame) {
-        return updateFrame(frame, Dispatcher.EXIT_STATUS_FRAME_CLEARED) > 0;
+    public boolean updateFrameClearedIfRunning(FrameInterface frame) {
+        return getJdbcTemplate().update(UPDATE_FRAME_CLEARED_IF_RUNNING,
+                FrameState.WAITING.toString(), Dispatcher.EXIT_STATUS_FRAME_CLEARED,
+                frame.getFrameId(), FrameState.RUNNING.toString(), frame.getVersion(),
+                frame.getFrameId()) > 0;
     }
 
     // spotless:off
@@ -186,8 +233,14 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
                     + "LEFT JOIN layer_stat ON layer_stat.pk_layer = layer_limit.pk_layer "
                     + "GROUP BY limit_record.pk_limit_record) AS sum_running "
                     + "ON limit_record.pk_limit_record = sum_running.pk_limit_record "
-                + "WHERE sum_running.int_sum_running < limit_record.int_max_value "
-                + "OR sum_running.int_sum_running IS NULL "
+                + "WHERE ("
+                    + "sum_running.int_sum_running < limit_record.int_max_value "
+                    + "OR sum_running.int_sum_running IS NULL"
+                + ") "
+                + "AND ("
+                    + "layer.ts_start_after IS NULL "
+                    + "OR layer.ts_start_after <= current_timestamp"
+                + ") "
             + ")";
     // spotless:on
 
@@ -196,11 +249,11 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
             "UPDATE frame "
             + "SET int_retries = int_retries + 1 "
             + "WHERE pk_frame = ? "
-            + "AND int_exit_status NOT IN (?,?,?,?,?,?,?) ";
+            + "AND int_exit_status <> ALL(?) ";
     // spotless:on
 
     @Override
-    public void updateFrameStarted(VirtualProc proc, FrameInterface frame) {
+    public int updateFrameStarted(VirtualProc proc, FrameInterface frame) {
 
         lockFrameForUpdate(frame, FrameState.WAITING);
 
@@ -210,6 +263,11 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
                     proc.memoryReserved, proc.gpusReserved, proc.gpuMemoryReserved,
                     frame.getFrameId(), FrameState.WAITING.toString(), frame.getVersion());
             if (result == 0) {
+                // Zero rows matched is also the normal outcome for a layer held back by its
+                // limit or its start-after gate, not only a version race.
+                logger.debug("Reservation refused for frame " + frame
+                        + "; frame was taken by another thread, or its layer is at a limit"
+                        + " or delayed by ts_start_after.");
                 String error_msg = "the frame " + frame + " was updated by another thread.";
                 throw new FrameReservationException(error_msg);
             }
@@ -223,16 +281,20 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
         /*
          * Frames that were killed via nimby or hardware errors not attributed to the software do
          * not increment the retry counter. Like failed launch, orphaned frame, failed kill or down
-         * host.
+         * host. Exit statuses configured for automatic layer backoff (dispatcher.layer_delay.rules)
+         * are excluded the same way, so delayed frames keep their full retry budget for genuine
+         * failures.
          */
         try {
-            getJdbcTemplate().update(UPDATE_FRAME_RETRIES, frame.getFrameId(), -1,
-                    FrameExitStatus.SKIP_RETRY_VALUE, FrameExitStatus.FAILED_LAUNCH_VALUE,
-                    Dispatcher.EXIT_STATUS_FRAME_CLEARED, Dispatcher.EXIT_STATUS_FRAME_ORPHAN,
-                    Dispatcher.EXIT_STATUS_FAILED_KILL, Dispatcher.EXIT_STATUS_DOWN_HOST);
+            getJdbcTemplate().update(UPDATE_FRAME_RETRIES, ps -> {
+                ps.setString(1, frame.getFrameId());
+                ps.setArray(2, ps.getConnection().createArrayOf("integer", retryExclusions));
+            });
         } catch (DataAccessException e) {
             throw new FrameReservationException(e.getCause());
         }
+
+        return frame.getVersion() + 1;
     }
 
     /**
@@ -575,13 +637,8 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
     // spotless:off
     public static final String FIND_ORPHANED_FRAMES =
             "SELECT "
-                + "frame.pk_frame, "
-                + "frame.pk_layer, "
-                + "frame.str_name, "
-                + "frame.int_version, "
-                + "job.pk_job, "
-                + "job.pk_show, "
-                + "job.pk_facility "
+                + "frame.*, "
+                + "job.pk_show "
             + "FROM "
                 + "frame, "
                 + "job "
@@ -589,12 +646,14 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
             + "AND frame.str_state = 'RUNNING' "
             + "AND job.str_state = 'PENDING' "
             + "AND (SELECT COUNT(1) FROM proc WHERE proc.pk_frame = frame.pk_frame) = 0 "
-            + "AND current_timestamp - frame.ts_updated > interval '300' second";
+            + "AND current_timestamp - frame.ts_updated > interval '300' second "
+            + "ORDER BY frame.ts_updated ASC, frame.pk_frame ASC "
+            + "LIMIT ?";
     // spotless:on
 
     @Override
-    public List<FrameInterface> getOrphanedFrames() {
-        return getJdbcTemplate().query(FIND_ORPHANED_FRAMES, FRAME_MAPPER);
+    public List<FrameDetail> getOrphanedFrames(int limit) {
+        return getJdbcTemplate().query(FIND_ORPHANED_FRAMES, FRAME_DETAIL_MAPPER, limit);
     }
 
     // spotless:off

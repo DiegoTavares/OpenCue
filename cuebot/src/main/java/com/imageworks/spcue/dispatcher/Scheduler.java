@@ -810,7 +810,7 @@ public class Scheduler extends JdbcDaoSupport {
                         }
                         frameCompleteHandler.queuePostOps(c);
                     } else {
-                        frameCompleteHandler.handleStaleCompletion(c.proc,
+                        frameCompleteHandler.handleStaleCompletion(c.proc, c.report,
                                 c.proc.getName() + "/" + c.frame.getName());
                     }
                 }

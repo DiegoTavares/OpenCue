@@ -239,6 +239,55 @@ Key configuration sections:
 - Logging configuration
 - NIMBY (Not In My Back Yard) settings
 - Container runtime settings (when enabled)
+- Log-based exit-status rules (see below)
+
+### Log-Based Exit-Status Rules
+
+When a frame exits with a non-zero code, RQD can reclassify the failure by scanning the tail of the frame log against operator-defined regular expressions. On the first matching rule, RQD reports that rule's `exit_status` to Cuebot instead of the process's real exit code. This lets operators single out failures that deserve special dispatcher handling — for example a Houdini license shortage that exits `3` but should be retried differently — without the render wrapper having to translate the error into an exit code itself.
+
+Configure it in the `runner` section of `rqd.yaml`:
+
+```yaml
+runner:
+  # Number of trailing log lines scanned on failure (default: 50).
+  # Set to 0, or leave log_exit_status_rules empty, to disable scanning.
+  log_scan_last_lines: 50
+
+  # Ordered regex -> exit-status rules. Evaluated top-to-bottom; first match wins.
+  log_exit_status_rules:
+    - name: "HOUDINI_LICENSE_ERROR"
+      regex: "A usable license to run the application is installed but they are all in use"
+      exit_status: 330
+```
+
+Behavior notes:
+
+- **Disabled by default**: the feature does nothing until `log_exit_status_rules` is non-empty and `log_scan_last_lines` is greater than `0`.
+- **Failures only**: successful frames (exit `0`) are never scanned, so there is no overhead on the happy path.
+- **First match wins**: place more specific patterns above general ones.
+- **`name`**: a human-readable identifier used only in RQD's log messages to make matches easy to trace.
+- **Invalid regex is skipped** (with a warning) rather than disabling the whole rule set.
+- **Efficient tail read**: the log tail is read backward in fixed-size chunks and stops once enough lines are collected — typically only a few kilobytes are read even for large logs, with a hard 1 MiB cap so a pathologically large log is never read in full.
+
+#### Cuebot-side handling: automatic layer backoff
+
+A substitute exit status is most useful when Cuebot is told what to do with it. Cuebot's
+`dispatcher.layer_delay.rules` property (in `opencue.properties`) maps exit statuses to a number of
+minutes; when a frame reports a configured status, Cuebot defers booking of the frame's whole layer
+for that long (`layer.ts_start_after`) instead of consuming a retry or killing the frame — the
+right behavior for a shared-resource shortage like a license pool, where every frame of the layer
+would hit the same wall:
+
+```properties
+# Comma-separated exit_status:minutes pairs. Empty (default) disables the feature.
+# Must agree with the exit statuses configured in rqd.yaml log_exit_status_rules.
+dispatcher.layer_delay.rules=330:5
+```
+
+The exit status is an arbitrary number chosen in `rqd.yaml` and repeated in `opencue.properties`;
+`330` is the conventional license-shortage code. Delayed layers are visible in CueGUI (tinted row
+plus a *Start After* column) and in the `cuebot_layers_delayed` / `cuebot_layer_delays_total`
+Prometheus metrics.
 
 ## Testing
 
@@ -336,6 +385,7 @@ rust/
 - **NIMBY support**: Automatic idle detection and resource management
 - **Signal handling**: Graceful shutdown and frame cleanup
 - **Reservation system**: Resource allocation and management
+- **Log-based exit-status rules**: Reclassify failed frames by matching their log output against configurable regex rules (e.g. flag license shortages)
 
 ### Experimental Features
 

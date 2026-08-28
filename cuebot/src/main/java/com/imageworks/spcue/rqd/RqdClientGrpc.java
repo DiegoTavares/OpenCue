@@ -15,11 +15,15 @@
 
 package com.imageworks.spcue.rqd;
 
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -36,6 +40,7 @@ import com.imageworks.spcue.grpc.report.RunningFrameInfo;
 import com.imageworks.spcue.grpc.rqd.RqdInterfaceGrpc;
 import com.imageworks.spcue.grpc.rqd.RqdStaticGetRunFrameRequest;
 import com.imageworks.spcue.grpc.rqd.RqdStaticGetRunFrameResponse;
+import com.imageworks.spcue.grpc.rqd.RqdStaticGetRunningFrameStatusRequest;
 import com.imageworks.spcue.grpc.rqd.RqdStaticKillRunningFrameRequest;
 import com.imageworks.spcue.grpc.rqd.RqdStaticLockAllRequest;
 import com.imageworks.spcue.grpc.rqd.RqdStaticUnlockAllRequest;
@@ -179,8 +184,42 @@ public final class RqdClientGrpc implements RqdClient {
         try {
             logger.info("killing frame on " + host + ", source: " + message);
             getStub(host).killRunningFrame(request);
-        } catch (StatusRuntimeException | ExecutionException e) {
+        } catch (StatusRuntimeException e) {
+            // RQD returns NOT_FOUND when the frame is not in its cache (already reaped, or the
+            // host restarted since the frame was dispatched): the render is confirmed not running
+            // there, which is the state the kill was meant to reach. Treat it as success so
+            // callers do not mistake the strongest possible "not running" proof for a failed
+            // kill (and, e.g., defer releasing a provably dead frame).
+            if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
+                logger.info("frame " + frameId + " is not running on " + host
+                        + " (NOT_FOUND), nothing to kill");
+                return;
+            }
             throw new RqdClientException("failed to kill frame " + frameId, e);
+        } catch (ExecutionException e) {
+            throw new RqdClientException("failed to kill frame " + frameId, e);
+        }
+    }
+
+    public boolean isFrameRunning(String host, String frameId) {
+        if (testMode) {
+            return false;
+        }
+
+        try {
+            getStub(host).getRunningFrameStatus(
+                    RqdStaticGetRunningFrameStatusRequest.newBuilder().setFrameId(frameId).build());
+            return true;
+        } catch (StatusRuntimeException e) {
+            // RQD returns NOT_FOUND once it has reaped the frame: the render is confirmed gone.
+            if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
+                return false;
+            }
+            // Any other failure (host unreachable, deadline, etc.) leaves the frame's state
+            // unknown; surface it so callers do not treat "could not reach" as "confirmed gone".
+            throw new RqdClientException("failed to obtain status for frame " + frameId, e);
+        } catch (ExecutionException e) {
+            throw new RqdClientException("failed to obtain status for frame " + frameId, e);
         }
     }
 
@@ -197,6 +236,30 @@ public final class RqdClientGrpc implements RqdClient {
         }
     }
 
+    /**
+     * Status codes for which a failed launch call does not prove RQD never started the frame:
+     * transport-level failures where the request may have been delivered and only the response was
+     * lost (or never produced in time).
+     *
+     * Every other code is a response from the server's application layer, which means the launch
+     * was processed and refused before any render was spawned. The two implementations report that
+     * differently: the Rust RQD maps its launch errors to ABORTED, FAILED_PRECONDITION or
+     * INVALID_ARGUMENT ({@code FrameManagerError} in rust/crates/rqd/src/frame/manager.rs), while
+     * the Python RQD's servicer sets no status code, so the exception it raises surfaces as UNKNOWN
+     * (rqd/rqd/rqdservicers.py). Both raise only before spawning, which is what makes "rejected"
+     * equivalent to "not running" here.
+     *
+     * One refusal inverts that: RQD rejects a launch for a frame it is already running (Python
+     * DuplicateFrameViolationException, Rust {@code FrameManagerError::AlreadyExist}), which proves
+     * the frame IS rendering on that host. It still lands in the rejected branch, so the caller's
+     * rollback releases the booking and kills the render. That kill goes to a host that just
+     * answered, so it lands and cannot double-book -- the cost is a wasted render, not a second
+     * booking.
+     */
+    private static final Set<Status.Code> LAUNCH_OUTCOME_UNKNOWN_CODES = Collections
+            .unmodifiableSet(EnumSet.of(Status.Code.DEADLINE_EXCEEDED, Status.Code.UNAVAILABLE,
+                    Status.Code.CANCELLED, Status.Code.INTERNAL, Status.Code.DATA_LOSS));
+
     public void launchFrame(final RunFrame frame, final VirtualProc proc) {
         RqdStaticLaunchFrameRequest request =
                 RqdStaticLaunchFrameRequest.newBuilder().setRunFrame(frame).build();
@@ -207,11 +270,23 @@ public final class RqdClientGrpc implements RqdClient {
 
         try {
             getStub(proc.hostName).launchFrame(request);
-        } catch (StatusRuntimeException | ExecutionException e) {
+        } catch (StatusRuntimeException e) {
             // Log the underlying cause: the caller only sees a generic
             // RqdClientException, which hides why the launch failed (e.g. an
             // EMFILE "Too many open files" once the per-host channel cache
             // exhausts the process FD limit at large farm scale).
+            logger.warn(
+                    "failed to launch frame on " + proc.hostName + ":" + rqdServerPort + ": " + e,
+                    e);
+            if (LAUNCH_OUTCOME_UNKNOWN_CODES.contains(e.getStatus().getCode())) {
+                throw new RqdLaunchUnknownOutcomeException(
+                        "failed to launch frame " + frame.getFrameId() + " on " + proc.hostName
+                                + ", outcome unknown: the frame may be running",
+                        e);
+            }
+            throw new RqdClientException("failed to launch frame", e);
+        } catch (ExecutionException e) {
+            // The channel could not even be created; the request was never sent.
             logger.warn(
                     "failed to launch frame on " + proc.hostName + ":" + rqdServerPort + ": " + e,
                     e);

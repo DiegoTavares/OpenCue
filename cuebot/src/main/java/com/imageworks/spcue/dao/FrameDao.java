@@ -163,9 +163,9 @@ public interface FrameDao {
      *
      * @param proc
      * @param frame
-     * @return
+     * @return the frame's version once started, which identifies this run for later fenced updates
      */
-    void updateFrameStarted(VirtualProc proc, FrameInterface frame);
+    int updateFrameStarted(VirtualProc proc, FrameInterface frame);
 
     /**
      * Batch variant of {@link #updateFrameStarted}: marks many frames RUNNING in one round-trip
@@ -218,12 +218,15 @@ public interface FrameDao {
             java.util.List<com.imageworks.spcue.dispatcher.QueuedFrameCompletion> completions);
 
     /**
-     * Sets a frame to an unreserved waiting state.
+     * Sets a frame to an unreserved waiting state, but only when it is still the RUNNING run the
+     * caller is holding: the frame must be Running at {@code frame.getVersion()} and have no proc
+     * pointing at it. Callers must pass a freshly read frame, so the version reflects the run being
+     * released and not a stale in-memory copy.
      *
      * @param frame
-     * @return
+     * @return true if the frame was reset, false if it has moved on and was left untouched
      */
-    boolean updateFrameCleared(FrameInterface frame);
+    boolean updateFrameClearedIfRunning(FrameInterface frame);
 
     /**
      * Sets a frame exitStatus to EXIT_STATUS_MEMORY_FAILURE
@@ -306,11 +309,15 @@ public interface FrameDao {
 
     /**
      * Returns a list of Running frames that have not had a proc assigned to them in over 5 min.
-     * This can happen when an operation aborts due to a deadlock.
+     * This can happen when an operation aborts due to a deadlock. The returned {@link FrameDetail}
+     * carries the frame's last-known host (via {@code lastResource}) so callers can act on it
+     * without an additional lookup. The result is bounded by {@code limit} so a fleet-wide event
+     * that orphans many frames is cleared across several passes rather than in one unbounded scan.
      *
+     * @param limit the maximum number of orphaned frames to return
      * @return
      */
-    List<FrameInterface> getOrphanedFrames();
+    List<FrameDetail> getOrphanedFrames(int limit);
 
     /**
      * Return a list of all frames that have positive dependency counts for the specified

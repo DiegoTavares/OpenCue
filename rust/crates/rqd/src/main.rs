@@ -64,6 +64,16 @@ async fn async_main() -> miette::Result<()> {
         log_builder.init();
     }
 
+    // Compile the log_exit_status_rules once now that logging is up, so an operator's typo in a
+    // rule's regex surfaces as a single startup warning instead of repeating on every failed
+    // frame (and no frame later pays to recompile them).
+    let _ = CONFIG.runner.compiled_exit_status_rules();
+
+    // Keep the exit-status rules editable without a restart (which would kill running frames
+    // on Linux): a watcher re-reads the config file periodically and swaps changed rules into
+    // the live set that all frames — including already-running ones — scan against.
+    tokio::spawn(config::watch_exit_status_rules());
+
     // Fail fast if the config requires elevated privileges the process does not hold,
     // instead of letting every frame fail later with an opaque error.
     capabilities::preflight(&CONFIG.runner)?;
