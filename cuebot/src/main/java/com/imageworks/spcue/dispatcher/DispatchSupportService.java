@@ -611,41 +611,38 @@ public class DispatchSupportService implements DispatchSupport {
 
         /*
          * Flapping and genuinely-dead hosts are indistinguishable at kill time. If the kill could
-         * not confirm the frame is stopped and the host is not confirmed dead, releasing the frame
-         * now would re-book it onto a second host while this RQD keeps rendering. In that case we
-         * DEFER the release: the proc row and RUNNING frame are left intact (preserving the
-         * host<->frame link, which is otherwise lost once the proc is deleted) so the frame is
-         * reclaimed later, once the host is confirmed DOWN (clearDownProcs) or the frame completes
-         * naturally. A genuinely dead host (marked DOWN, or no longer Up) leaves no live RQD, so
-         * release is safe. See design/frame_double_booking_v2.md.
+         * not confirm the frame is stopped, releasing the frame now would re-book it onto a second
+         * host while this RQD keeps rendering. In that case we DEFER the release: the proc row and
+         * RUNNING frame are left intact (preserving the host<->frame link, which is otherwise lost
+         * once the proc is deleted) so the frame is reclaimed later, when a retry of the kill
+         * confirms it, the frame completes naturally, or the deferral bound expires. The host being
+         * marked DOWN is deliberately NOT taken as proof of death here: DOWN only means no
+         * processed report for the host-down interval, which a network partition or a Cuebot-side
+         * report-ingest stall produces just as well while the renders keep running. See
+         * design/frame_double_booking_v2.md.
          *
-         * The deferral is bounded: a proc whose frame has gone unproven-alive (no ping) for longer
-         * than dispatcher.lost_proc_max_defer_ms is failed closed instead -- the proc is released
-         * but the frame is parked DEAD (manual retry), never WAITING, so an unconfirmable render
-         * can neither linger RUNNING forever nor be auto-rebooked. This mirrors
-         * maintenance.orphaned_frame_max_defer_ms on the orphaned-frame side.
+         * The deferral is bounded: once a proc's frame has gone unproven-alive (no ping) for longer
+         * than dispatcher.lost_proc_max_defer_ms the proc is released, and the frame's stop state
+         * depends on the evidence -- WAITING (auto-retry) when the host has also been down and
+         * silent the whole bound (dead with its host), DEAD (manual retry) otherwise, so an
+         * unconfirmable render can neither linger RUNNING forever nor be auto-rebooked. This
+         * mirrors maintenance.orphaned_frame_max_defer_ms on the orphaned-frame side.
          */
         FrameState stopState = FrameState.WAITING;
         boolean deferReleaseEnabled = env.getProperty(
                 "dispatcher.defer_release_on_failed_kill_enabled", Boolean.class, true);
         if (deferReleaseEnabled && !confirmedStopped && proc.frameId != null) {
             /*
-             * A delivered kill is positive proof of a live RQD and a live render, so the host
-             * cannot be treated as dead no matter what the DB's hardware state says (a host marked
-             * DOWN that still answers its kill RPC is partitioned or report-starved, not dead).
-             */
-            boolean hostConfirmedDead = !killDelivered
-                    && (exitStatus == Dispatcher.EXIT_STATUS_DOWN_HOST || !hostDao.isHostUp(proc));
-            /*
              * A host that booted after this proc was dispatched cannot still be running the render
              * -- it died with the reboot -- so the release is safe even though the kill could not
-             * confirm it (e.g. the restarted host is not reachable yet).
+             * confirm it (e.g. the restarted host is not reachable yet). A delivered kill is
+             * positive proof of a live render, so the reboot escape hatch cannot apply then.
              */
-            if (!hostConfirmedDead && !killDelivered && procDao.isHostRebootedSinceDispatch(proc)) {
+            boolean hostConfirmedDead = !killDelivered && procDao.isHostRebootedSinceDispatch(proc);
+            if (hostConfirmedDead) {
                 logger.info("Releasing lost proc " + proc.getName() + ": its host reports a boot "
                         + "time later than the proc's dispatch, so frame " + proc.frameId
                         + " cannot still be running there.");
-                hostConfirmedDead = true;
             }
             if (!hostConfirmedDead) {
                 long maxDeferMs = env.getProperty("dispatcher.lost_proc_max_defer_ms", Long.class,
@@ -666,12 +663,34 @@ public class DispatchSupportService implements DispatchSupport {
                     }
                     return false;
                 }
-                logger.warn("Releasing lost proc " + proc.getName() + " after " + maxDeferMs
-                        + "ms without a ping proving frame " + proc.frameId + " alive; the kill "
-                        + "still could not confirm the frame stopped, so the frame is marked DEAD "
-                        + "(manual retry) instead of WAITING to avoid double-booking. reason="
-                        + reason);
-                stopState = FrameState.DEAD;
+                /*
+                 * Past the deferral bound the proc must be released, and the frame's stop state
+                 * depends on the evidence. A host that is marked DOWN (or otherwise not Up) has now
+                 * also been silent for the whole bound: a live-but-partitioned host would have
+                 * resumed reporting, so this one is treated as genuinely dead and the frame goes
+                 * back to WAITING (auto-retry). The DOWN mark alone is NOT that proof -- it only
+                 * means 5 minutes without a processed report, which a network partition or a
+                 * Cuebot-side report-ingest stall produces just as well, and releasing on it
+                 * re-booked live frames en masse (the Aug 2026 double-booking reports). A host that
+                 * still looks Up (or a delivered kill whose complete report never arrived) keeps
+                 * failing closed: the frame is parked DEAD (manual retry), never WAITING.
+                 */
+                boolean hostSilentAndDown =
+                        !killDelivered && (exitStatus == Dispatcher.EXIT_STATUS_DOWN_HOST
+                                || !hostDao.isHostUp(proc));
+                if (hostSilentAndDown) {
+                    logger.warn("Releasing lost proc " + proc.getName() + ": its host has been "
+                            + "down and silent for over " + maxDeferMs + "ms, so frame "
+                            + proc.frameId + " is considered dead with its host and reset to "
+                            + "WAITING. reason=" + reason);
+                } else {
+                    logger.warn("Releasing lost proc " + proc.getName() + " after " + maxDeferMs
+                            + "ms without a ping proving frame " + proc.frameId + " alive; the "
+                            + "kill still could not confirm the frame stopped, so the frame is "
+                            + "marked DEAD (manual retry) instead of WAITING to avoid "
+                            + "double-booking. reason=" + reason);
+                    stopState = FrameState.DEAD;
+                }
             }
         }
 
