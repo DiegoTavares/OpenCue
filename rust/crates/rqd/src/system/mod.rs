@@ -33,3 +33,45 @@ pub type PhysId = u32;
 pub type ThreadId = u32;
 
 pub use oom::OOM_REASON_MSG;
+
+/// Maps a kill/killpg result so ESRCH ("no such process") counts as success: the target is
+/// already gone, which is exactly the state the signal was meant to reach. Reporting it as a
+/// failure makes callers (and Cuebot behind them) treat an already-dead render as an unconfirmed
+/// kill. Any other errno is a real failure.
+#[cfg(unix)]
+pub(crate) fn signal_result_tolerating_esrch(
+    result: nix::Result<()>,
+    target: u32,
+    action: &str,
+) -> miette::Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(nix::errno::Errno::ESRCH) => {
+            tracing::info!("{action} {target}: process group already gone (ESRCH), nothing to kill");
+            Ok(())
+        }
+        Err(err) => Err(miette::miette!("Failed to {action} {target}. {err}")),
+    }
+}
+
+#[cfg(all(test, unix))]
+mod signal_result_tests {
+    use super::signal_result_tolerating_esrch;
+
+    #[test]
+    fn esrch_counts_as_success() {
+        assert!(signal_result_tolerating_esrch(Err(nix::errno::Errno::ESRCH), 1234, "kill").is_ok());
+    }
+
+    #[test]
+    fn other_errnos_stay_failures() {
+        assert!(
+            signal_result_tolerating_esrch(Err(nix::errno::Errno::EPERM), 1234, "kill").is_err()
+        );
+    }
+
+    #[test]
+    fn ok_passes_through() {
+        assert!(signal_result_tolerating_esrch(Ok(()), 1234, "kill").is_ok());
+    }
+}
