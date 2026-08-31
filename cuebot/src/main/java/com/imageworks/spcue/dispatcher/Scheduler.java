@@ -1265,8 +1265,8 @@ public class Scheduler extends JdbcDaoSupport {
         }
         resolveLicenseBudgets(candidates, layerLicenses, licenseBudgets);
         int booked = dispatchGroupWithScoring(idleGroup, fullGroup, candidates, seenLayerIds,
-                jobCoresUsed, showCoresUsed, limitUsed, folderUsed, reservationReqs, tReadyByHost,
-                hostLayerAffinity, licenseBudgets, licenseUsed, licenseSeats);
+                spec.pkAlloc, jobCoresUsed, showCoresUsed, limitUsed, folderUsed, reservationReqs,
+                tReadyByHost, hostLayerAffinity, licenseBudgets, licenseUsed, licenseSeats);
         stats.strandedCores += strandedWholeCores(fullGroup, candidates);
         if (booked > 0)
             stats.booked++;
@@ -2104,7 +2104,7 @@ public class Scheduler extends JdbcDaoSupport {
      * for layers that left the dispatchable set.
      */
     private int dispatchGroupWithScoring(List<BookableHost> hosts, List<BookableHost> fullHosts,
-            List<LayerCandidate> candidates, Set<String> seenLayerIds,
+            List<LayerCandidate> candidates, Set<String> seenLayerIds, String groupAllocId,
             Map<String, Integer> jobCoresUsed, Map<String, Integer> showCoresUsed,
             Map<String, Integer> limitUsed, Map<String, Integer> folderUsed,
             List<ReservationRequest> reservationReqs, Map<String, Integer> tReadyByHost,
@@ -2139,7 +2139,11 @@ public class Scheduler extends JdbcDaoSupport {
             // earlier dispatches of the same job/show (here or in another
             // group) count against this candidate's caps.
             c.jobCoresInUse = jobCoresUsed.computeIfAbsent(c.jobId, k -> c.jobCoresInUse);
-            c.showCoresInUse = showCoresUsed.computeIfAbsent(c.showId, k -> c.showCoresInUse);
+            // Keyed on the subscription, not the show: a show with two allocations has
+            // two bursts, and the candidate row carries this group's own sub.int_cores.
+            c.showCoresInUse =
+                    showCoresUsed.computeIfAbsent(subKey(c.showId, groupAllocId),
+                            k -> c.showCoresInUse);
             // Seed this limit's tick-wide running count from the farm-wide count
             // the first time it is seen this tick (candidate query already
             // excluded limits that were full at query time; this catches a limit
@@ -2322,7 +2326,7 @@ public class Scheduler extends JdbcDaoSupport {
                 // Publish back so other candidates of the same job/show this
                 // tick see the updated usage.
                 jobCoresUsed.put(c.jobId, c.jobCoresInUse);
-                showCoresUsed.put(c.showId, c.showCoresInUse);
+                showCoresUsed.put(subKey(c.showId, groupAllocId), c.showCoresInUse);
                 if (layerHostMaxFrac > 0)
                     hostLayerFrames.merge(best.hostId + "|" + c.layerId, estFrames, Integer::sum);
                 if (!c.rssProven)
@@ -2912,10 +2916,19 @@ public class Scheduler extends JdbcDaoSupport {
             }
             long cores = p.coresReserved;
             long gpus = p.gpusReserved;
-            addDelta(subDeltas, p.getShowId() + "\t" + p.getAllocationId(), cores, gpus);
+            addDelta(subDeltas, subKey(p.getShowId(), p.getAllocationId()), cores, gpus);
             addDelta(layerDeltas, p.getLayerId(), cores, gpus);
             addDelta(jobDeltas, p.getJobId(), cores, gpus);
         }
+    }
+
+    /**
+     * The identity a show's cores are counted against: the subscription, which is per show AND
+     * allocation and carries its own burst. Used by both the in-tick cap accounting and the
+     * subscription mirror, so the two can never key on different things again.
+     */
+    static String subKey(String showId, String allocId) {
+        return showId + "\t" + allocId;
     }
 
     private static void addDelta(Map<String, long[]> buf, String key, long cores, long gpus) {

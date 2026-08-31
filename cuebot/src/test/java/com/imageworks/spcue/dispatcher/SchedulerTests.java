@@ -609,6 +609,22 @@ public class SchedulerTests {
         assertEquals(100, c.layerCoresMin);
         assertTrue(c.rssProven);
     }
+
+    // ---- subscription identity --------------------------------------------
+
+    @Test
+    public void showCapIsKeyedOnTheSubscriptionNotTheShow() {
+        // A show with two allocations holds two subscriptions, each with its own
+        // burst and its own int_cores. Sharing one in-tick counter between them
+        // let whichever allocation planned first decide the other's cap.
+        assertFalse("two allocations of one show must not share a key",
+                Scheduler.subKey("show", "allocA").equals(Scheduler.subKey("show", "allocB")));
+        // Same subscription, same key: the in-tick cap and the mirror agree.
+        assertEquals(Scheduler.subKey("show", "allocA"), Scheduler.subKey("show", "allocA"));
+        // Different shows on one allocation stay separate too.
+        assertFalse(Scheduler.subKey("showA", "alloc").equals(Scheduler.subKey("showB", "alloc")));
+    }
+
     // ---- tick liveness ----------------------------------------------------
 
     /**
