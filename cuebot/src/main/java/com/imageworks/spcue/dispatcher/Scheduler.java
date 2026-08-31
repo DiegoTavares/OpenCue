@@ -1373,10 +1373,20 @@ public class Scheduler extends JdbcDaoSupport {
         long tRead = System.currentTimeMillis();
         tickPlanned = planned.size();
 
-        // 4b. COMMIT the survivors in one batch, then account and launch them.
-        List<FrameBooking> committed =
-                planned.isEmpty() ? java.util.Collections.<FrameBooking>emptyList()
-                        : dispatchSupport.startFramesAndProcsBatch(planned);
+        // 4b. COMMIT the survivors and their resource accounting in ONE transaction, then
+        // launch them. DispatchSupportService is REQUIRED, so the batch joins this
+        // transaction rather than opening its own: procs and the counters that mirror them
+        // commit together or not at all. Splitting them let a crash in between leave procs
+        // whose cores were never added, while the release path subtracts them regardless,
+        // and four of the five mirrors have no repair job to undo that.
+        final List<FrameBooking> toCommit = planned;
+        List<FrameBooking> committed = toCommit.isEmpty()
+                ? java.util.Collections.<FrameBooking>emptyList()
+                : txTemplate().execute(status -> {
+                    List<FrameBooking> won = dispatchSupport.startFramesAndProcsBatch(toCommit);
+                    applyResourceDeltas(won);
+                    return won;
+                });
         long tCommit = System.currentTimeMillis();
         // Monitoring events go out AFTER the commit transaction so a slow
         // publish can never extend the booking commit's lock window.
@@ -1560,12 +1570,22 @@ public class Scheduler extends JdbcDaoSupport {
             bumpShowCoresLive(b.frame.show, b.proc.coresReserved / (double) CORE_POINTS_PER_CORE);
             runningFramesLive++;
         }
-        if (batchResourceAccounting && !committed.isEmpty()) {
-            List<VirtualProc> procs = new ArrayList<>(committed.size());
-            for (FrameBooking b : committed)
-                procs.add(b.proc);
-            accumulateResourceDeltas(procs);
+    }
+
+    /**
+     * Mirror the winners' cores and gpus into the subscription, layer, job, folder and point
+     * counters. Called INSIDE the booking transaction, so a failure here rolls the bookings back
+     * with it and there is nothing left over to retry: the procs those deltas describe never
+     * existed. Skipped entirely when the Rust scheduler owns those tables.
+     */
+    private void applyResourceDeltas(List<FrameBooking> committed) {
+        if (!batchResourceAccounting || committed.isEmpty()) {
+            return;
         }
+        List<VirtualProc> procs = new ArrayList<>(committed.size());
+        for (FrameBooking b : committed)
+            procs.add(b.proc);
+        accumulateResourceDeltas(procs);
         flushResourceDeltas();
     }
 
@@ -2968,28 +2988,17 @@ public class Scheduler extends JdbcDaoSupport {
             burstBatch.add(new Object[] {(int) d[0], k[0], k[1]});
             pairBatch.add(new Object[] {(int) d[0], (int) d[0], (int) d[1], k[0], k[1]});
         }
-        try {
-            // Same cap-neutral pair trick as flushJobDeltas: verify_subscription
-            // rejects a plus that lands over the burst while the burst column is
-            // unchanged, so an admin shrinking a busy subscription would wedge
-            // this flush forever. Each statement below touches int_burst, the
-            // trigger's WHEN clause skips both, and burst is net unchanged at
-            // commit. Burst enforcement stays in the planner at plan time.
-            txTemplate().execute(status -> {
-                getJdbcTemplate().batchUpdate("UPDATE subscription SET int_burst = int_burst + ? "
-                        + "WHERE pk_show = ? AND pk_alloc = ?", burstBatch);
-                getJdbcTemplate().batchUpdate("UPDATE subscription SET int_cores = int_cores + ?, "
-                        + "int_burst = int_burst - ?, int_gpus = int_gpus + ? "
-                        + "WHERE pk_show = ? AND pk_alloc = ?", pairBatch);
-                return null;
-            });
-        } catch (RuntimeException ex) {
-            logger.warn("Scheduler: subscription delta flush failed, retrying next tick: "
-                    + ex.getMessage());
-            for (Map.Entry<String, long[]> e : snap.entrySet()) {
-                addDelta(subDeltas, e.getKey(), e.getValue()[0], e.getValue()[1]);
-            }
-        }
+        // Same cap-neutral pair trick as flushJobDeltas: verify_subscription
+        // rejects a plus that lands over the burst while the burst column is
+        // unchanged, so an admin shrinking a busy subscription would wedge
+        // this flush forever. Each statement below touches int_burst, the
+        // trigger's WHEN clause skips both, and burst is net unchanged at
+        // commit. Burst enforcement stays in the planner at plan time.
+        getJdbcTemplate().batchUpdate("UPDATE subscription SET int_burst = int_burst + ? "
+                + "WHERE pk_show = ? AND pk_alloc = ?", burstBatch);
+        getJdbcTemplate().batchUpdate("UPDATE subscription SET int_cores = int_cores + ?, "
+                + "int_burst = int_burst - ?, int_gpus = int_gpus + ? "
+                + "WHERE pk_show = ? AND pk_alloc = ?", pairBatch);
     }
 
     private void flushLayerDeltas() {
@@ -3002,20 +3011,8 @@ public class Scheduler extends JdbcDaoSupport {
             long[] d = e.getValue();
             batch.add(new Object[] {(int) d[0], (int) d[1], e.getKey()});
         }
-        try {
-            txTemplate().execute(status -> {
-                getJdbcTemplate()
-                        .batchUpdate("UPDATE layer_resource SET int_cores = int_cores + ?, "
-                                + "int_gpus = int_gpus + ? WHERE pk_layer = ?", batch);
-                return null;
-            });
-        } catch (RuntimeException ex) {
-            logger.warn("Scheduler: layer_resource delta flush failed, retrying next tick: "
-                    + ex.getMessage());
-            for (Map.Entry<String, long[]> e : snap.entrySet()) {
-                addDelta(layerDeltas, e.getKey(), e.getValue()[0], e.getValue()[1]);
-            }
-        }
+        getJdbcTemplate().batchUpdate("UPDATE layer_resource SET int_cores = int_cores + ?, "
+                + "int_gpus = int_gpus + ? WHERE pk_layer = ?", batch);
     }
 
     private void flushJobDeltas() {
@@ -3035,50 +3032,33 @@ public class Scheduler extends JdbcDaoSupport {
             pairBatch.add(new Object[] {cores, cores, gpus, gpus, jobId});
             pointBatch.add(new Object[] {cores, gpus, jobId, jobId});
         }
-        try {
-            // One transaction for all three UPDATEs: on a mid-flush error the whole
-            // set rolls back, so the retry (which re-queues the drained deltas) can
-            // never double-apply a sub-batch that had already committed.
-            //
-            // The job_resource write is a max-neutral PAIR, not a plain add. The
-            // legacy trigger verify_job_resources rejects any statement that raises
-            // int_cores while int_max_cores stays unchanged; when a user lowers a
-            // running job's max under load, that rejection aborts the whole batch,
-            // the pluses wedge in the retry buffer while completions keep
-            // subtracting, and the mirror drifts negative (the CAPDROP verify
-            // scenario reproduces this). Cap ENFORCEMENT is the planner's job at
-            // plan time; this mirror must always record reality. Each statement
-            // below also touches int_max_cores, so the trigger's WHEN clause skips
-            // both, and max is net unchanged at commit. Leans on that WHEN clause
-            // (V11: fires only on cores-up with max unchanged) by design.
-            txTemplate().execute(status -> {
-                getJdbcTemplate()
-                        .batchUpdate(
-                                "UPDATE job_resource SET int_max_cores = int_max_cores + ?, "
-                                        + "int_max_gpus = int_max_gpus + ? WHERE pk_job = ?",
-                                jobBatch);
-                getJdbcTemplate().batchUpdate("UPDATE job_resource SET int_cores = int_cores + ?, "
-                        + "int_max_cores = int_max_cores - ?, int_gpus = int_gpus + ?, "
-                        + "int_max_gpus = int_max_gpus - ? WHERE pk_job = ?", pairBatch);
-                getJdbcTemplate().batchUpdate(
-                        "UPDATE folder_resource SET int_cores = int_cores + ?, "
-                                + "int_gpus = int_gpus + ? "
-                                + "WHERE pk_folder = (SELECT pk_folder FROM job WHERE pk_job = ?)",
-                        jobBatch);
-                getJdbcTemplate().batchUpdate(
-                        "UPDATE point SET int_cores = int_cores + ?, int_gpus = int_gpus + ? "
-                                + "WHERE pk_dept = (SELECT pk_dept FROM job WHERE pk_job = ?) "
-                                + "AND pk_show = (SELECT pk_show FROM job WHERE pk_job = ?)",
-                        pointBatch);
-                return null;
-            });
-        } catch (RuntimeException ex) {
-            logger.warn("Scheduler: job/folder/point delta flush failed, retrying next tick: "
-                    + ex.getMessage());
-            for (Map.Entry<String, long[]> e : snap.entrySet()) {
-                addDelta(jobDeltas, e.getKey(), e.getValue()[0], e.getValue()[1]);
-            }
-        }
+        // The job_resource write is a max-neutral PAIR, not a plain add. The
+        // legacy trigger verify_job_resources rejects any statement that raises
+        // int_cores while int_max_cores stays unchanged; when a user lowers a
+        // running job's max under load, that rejection aborts the whole batch
+        // and the mirror drifts (the CAPDROP verify scenario reproduces this).
+        // Cap ENFORCEMENT is the planner's job at plan time; this mirror must
+        // always record reality. Each statement below also touches
+        // int_max_cores, so the trigger's WHEN clause skips both, and max is
+        // net unchanged at commit. Leans on that WHEN clause (V11: fires only
+        // on cores-up with max unchanged) by design.
+        getJdbcTemplate().batchUpdate(
+                "UPDATE job_resource SET int_max_cores = int_max_cores + ?, "
+                        + "int_max_gpus = int_max_gpus + ? WHERE pk_job = ?",
+                jobBatch);
+        getJdbcTemplate().batchUpdate("UPDATE job_resource SET int_cores = int_cores + ?, "
+                + "int_max_cores = int_max_cores - ?, int_gpus = int_gpus + ?, "
+                + "int_max_gpus = int_max_gpus - ? WHERE pk_job = ?", pairBatch);
+        getJdbcTemplate().batchUpdate(
+                "UPDATE folder_resource SET int_cores = int_cores + ?, "
+                        + "int_gpus = int_gpus + ? "
+                        + "WHERE pk_folder = (SELECT pk_folder FROM job WHERE pk_job = ?)",
+                jobBatch);
+        getJdbcTemplate().batchUpdate(
+                "UPDATE point SET int_cores = int_cores + ?, int_gpus = int_gpus + ? "
+                        + "WHERE pk_dept = (SELECT pk_dept FROM job WHERE pk_job = ?) "
+                        + "AND pk_show = (SELECT pk_show FROM job WHERE pk_job = ?)",
+                pointBatch);
     }
 
     /** Copy out the current deltas and clear the buffer for the next tick. */
