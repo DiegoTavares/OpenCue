@@ -15,6 +15,7 @@
 
 package com.imageworks.spcue.dao.postgres;
 
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.support.JdbcDaoSupport;
 
@@ -413,23 +415,37 @@ public class FrameDaoJdbc extends JdbcDaoSupport implements FrameDao {
             throw new FrameReservationException(e.getCause());
         }
 
-        java.util.List<Object[]> retryParams = new java.util.ArrayList<>();
+        // consumed by the retry batch below
+        final List<String> retryWinners = new ArrayList<>();
         for (int i = 0; i < bookings.size(); i++) {
             // A JDBC batch may report SUCCESS_NO_INFO (-2); treat anything but an
             // explicit 0 as a win, since the WHERE clause matches at most one row.
             won[i] = counts[i] != 0;
             if (won[i]) {
-                retryParams.add(new Object[] {bookings.get(i).frame.getFrameId(), -1,
-                        FrameExitStatus.SKIP_RETRY_VALUE, FrameExitStatus.FAILED_LAUNCH_VALUE,
-                        Dispatcher.EXIT_STATUS_FRAME_CLEARED, Dispatcher.EXIT_STATUS_FRAME_ORPHAN,
-                        Dispatcher.EXIT_STATUS_FAILED_KILL, Dispatcher.EXIT_STATUS_DOWN_HOST});
+                retryWinners.add(bookings.get(i).frame.getFrameId());
             }
         }
 
-        // 2. Bump the retry counter for the winners, also batched.
-        if (!retryParams.isEmpty()) {
+        // 2. Bump the retry counter for the winners, also batched. The exclusion list is one
+        // SQL array parameter, exactly as the single-frame path binds it, so both callers of
+        // UPDATE_FRAME_RETRIES read the same retryExclusions field and a layer-delay status
+        // can never burn a retry on one path but not the other.
+        if (!retryWinners.isEmpty()) {
             try {
-                getJdbcTemplate().batchUpdate(UPDATE_FRAME_RETRIES, retryParams);
+                getJdbcTemplate().batchUpdate(UPDATE_FRAME_RETRIES,
+                        new BatchPreparedStatementSetter() {
+                            @Override
+                            public void setValues(PreparedStatement ps, int i) throws SQLException {
+                                ps.setString(1, retryWinners.get(i));
+                                ps.setArray(2, ps.getConnection().createArrayOf("integer",
+                                        retryExclusions));
+                            }
+
+                            @Override
+                            public int getBatchSize() {
+                                return retryWinners.size();
+                            }
+                        });
             } catch (DataAccessException e) {
                 throw new FrameReservationException(e.getCause());
             }
