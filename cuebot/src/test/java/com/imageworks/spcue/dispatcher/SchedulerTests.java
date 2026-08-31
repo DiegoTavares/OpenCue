@@ -14,12 +14,15 @@
 
 package com.imageworks.spcue.dispatcher;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.Test;
+import org.springframework.mock.env.MockEnvironment;
 
 import com.imageworks.spcue.DispatchFrame;
 import com.imageworks.spcue.DispatchHost;
@@ -605,5 +608,49 @@ public class SchedulerTests {
         resize(c, new LayerLiveMem());
         assertEquals(100, c.layerCoresMin);
         assertTrue(c.rssProven);
+    }
+    // ---- tick liveness ----------------------------------------------------
+
+    /**
+     * A Scheduler whose environment holds a malformed scheduler.* number, so the lazy pool startup
+     * on the first tick throws while converting it.
+     */
+    private static Scheduler schedulerWithBadPoolProperty() throws Exception {
+        MockEnvironment env = new MockEnvironment();
+        env.setProperty("scheduler.enabled", "facility");
+        env.setProperty("scheduler.launch_pool_size", "not-a-number");
+        Scheduler s = new Scheduler();
+        Field f = Scheduler.class.getDeclaredField("env");
+        f.setAccessible(true);
+        f.set(s, env);
+        return s;
+    }
+
+    /** Reads the private tick latch; a stuck one is the failure this guards. */
+    private static boolean tickLatchHeld(Scheduler s) throws Exception {
+        Field flag = Scheduler.class.getDeclaredField("tickInFlight");
+        flag.setAccessible(true);
+        return ((AtomicBoolean) flag.get(s)).get();
+    }
+
+    @Test
+    public void failedPoolStartupStillReleasesTheTick() throws Exception {
+        // Pool startup runs inside the tick's try, so a bad property is caught and
+        // the finally clears tickInFlight. Before that, the throw escaped runTick
+        // with the flag still set, and every later tick returned at the CAS: the
+        // scheduler stopped booking, and stopped logging, for the life of the JVM.
+        Scheduler s = schedulerWithBadPoolProperty();
+        s.runTick();
+        assertFalse("a failed tick must leave the latch clear", tickLatchHeld(s));
+    }
+
+    @Test
+    public void aLaterTickStillRunsAfterAFailedOne() throws Exception {
+        // The liveness consequence: tick N+1 must still reach its work and leave
+        // the latch clear in turn.
+        Scheduler s = schedulerWithBadPoolProperty();
+        s.runTick();
+        s.runTick();
+        assertFalse("the latch must stay clear across repeated failures", tickLatchHeld(s));
     }
 }

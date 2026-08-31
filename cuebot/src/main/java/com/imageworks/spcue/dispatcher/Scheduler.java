@@ -730,9 +730,12 @@ public class Scheduler extends JdbcDaoSupport {
             summarySkipped.incrementAndGet();
             return;
         }
-        startSchedulerPoolsIfNeeded();
         long t0 = System.currentTimeMillis();
         try {
+            // Inside the try: pool startup parses properties and builds the license
+            // source, and a throw here would otherwise skip the finally and leave
+            // tickInFlight set, which stops every later tick at the CAS above.
+            startSchedulerPoolsIfNeeded();
             int dispatched = doTick();
             if (dispatched >= 0) {
                 long ms = System.currentTimeMillis() - t0;
