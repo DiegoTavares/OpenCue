@@ -15,7 +15,9 @@
 
 package com.imageworks.spcue.dispatcher;
 
+import java.time.Duration;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -51,6 +53,7 @@ import com.imageworks.spcue.service.JobManagerSupport;
 import com.imageworks.spcue.util.CueExceptionUtil;
 import com.imageworks.spcue.util.CueUtil;
 
+import com.imageworks.spcue.dao.LayerDao;
 import com.imageworks.spcue.dao.WhiteboardDao;
 import com.imageworks.spcue.dao.ShowDao;
 import com.imageworks.spcue.dao.ServiceDao;
@@ -103,6 +106,7 @@ public class FrameCompleteHandler {
     private WhiteboardDao whiteboardDao;
     private ServiceDao serviceDao;
     private ShowDao showDao;
+    private LayerDao layerDao;
     private Environment env;
     private KafkaEventPublisher kafkaEventPublisher;
     private MonitoringEventBuilder monitoringEventBuilder;
@@ -131,6 +135,13 @@ public class FrameCompleteHandler {
      */
     private boolean satisfyDependOnlyOnFrameSuccess;
 
+    /**
+     * Exit statuses that defer the whole layer's booking instead of consuming a retry or killing
+     * the frame, mapped to how long the layer is deferred. Parsed at startup from
+     * dispatcher.layer_delay.rules; empty (the default) disables the automatic backoff.
+     */
+    private volatile Map<Integer, Duration> delayRules;
+
     public boolean getSatisfyDependOnlyOnFrameSuccess() {
         return satisfyDependOnlyOnFrameSuccess;
     }
@@ -139,11 +150,25 @@ public class FrameCompleteHandler {
         this.satisfyDependOnlyOnFrameSuccess = satisfyDependOnlyOnFrameSuccess;
     }
 
+    public Map<Integer, Duration> getDelayRules() {
+        return delayRules;
+    }
+
+    /**
+     * Replaces the parsed dispatcher.layer_delay.rules. Cuebot sets these once from configuration
+     * at startup; this exists so tests can exercise a rule set without standing up a second
+     * application context.
+     */
+    public void setDelayRules(Map<Integer, Duration> delayRules) {
+        this.delayRules = delayRules;
+    }
+
     @Autowired
     public FrameCompleteHandler(Environment env) {
         this.env = env;
         satisfyDependOnlyOnFrameSuccess =
                 env.getProperty("depend.satisfy_only_on_frame_success", Boolean.class, true);
+        delayRules = LayerDelayRules.parse(env.getProperty("dispatcher.layer_delay.rules", ""));
     }
 
     /**
@@ -170,15 +195,42 @@ public class FrameCompleteHandler {
                 finalizeOrphanedFrameComplete(report);
                 return;
             }
+
+            final String key = proc.getJobId() + "_" + report.getFrame().getLayerId() + "_"
+                    + report.getFrame().getFrameId();
+
+            /*
+             * Ownership fence: a report may only stop the run of the frame it describes. Stopping a
+             * frame clears its proc's assignment in the same transaction, so a reporting proc that
+             * no longer holds the reported frame means that run has been superseded: the frame was
+             * freed by another actor (retry, eat, lostProc, orphan reaper) and may already be
+             * RUNNING again under a different proc. Applying the report anyway would stop the
+             * current run and free the frame for yet another booking, sustaining a kill -> report
+             * -> free -> rebook cascade. The int_version fence on stopFrame cannot catch this, as
+             * it is read fresh below and only covers concurrent writers, not a report from an older
+             * run.
+             */
+            if (proc.frameId == null || !proc.frameId.equals(report.getFrame().getFrameId())) {
+                logger.info("Diverting superseded frame complete report for "
+                        + report.getFrame().getFrameName() + "; proc " + proc.getProcId() + " on "
+                        + proc.hostName + " no longer owns the frame ("
+                        + (proc.frameId == null ? "no frame assigned" : "now on " + proc.frameId)
+                        + ").");
+                if (prometheusMetrics != null) {
+                    prometheusMetrics.incrementFrameCompleteSuperseded(
+                            proc.frameId == null ? "no_owner" : "other_frame");
+                }
+                handleStaleReport(proc, report, key);
+                return;
+            }
+
             final DispatchJob job = jobManager.getDispatchJob(proc.getJobId());
             final LayerDetail layer = jobManager.getLayerDetail(report.getFrame().getLayerId());
             final FrameDetail frameDetail =
                     jobManager.getFrameDetail(report.getFrame().getFrameId());
             final DispatchFrame frame = jobManager.getDispatchFrame(report.getFrame().getFrameId());
             final FrameState newFrameState =
-                    determineFrameState(job, layer, frame, report, frameDetail);
-            final String key = proc.getJobId() + "_" + report.getFrame().getLayerId() + "_"
-                    + report.getFrame().getFrameId();
+                    determineFrameState(job, layer, frame, report, frameDetail, delayRules);
 
             int exitStatus = resolveExitStatus(report, frameDetail);
 
@@ -228,6 +280,11 @@ public class FrameCompleteHandler {
      * still goes through redirect/unbook: stopping a frame clears its proc's assignment, so this is
      * the normal state for a proc whose frame was stopped by another actor (eat, retry, kill) and
      * that now needs to be released.
+     *
+     * The release itself is deferred to {@link #releaseStaleProc}, which re-reads the proc
+     * immediately before releasing it and drops the report when that read shows a newer run. A
+     * report that gets past the duplicate check is discarded on every path, so it is counted (and a
+     * successful report flagged as a lost render result) here, before the release is queued.
      */
     private void handleStaleReport(VirtualProc proc, FrameCompleteReport report, String key) {
         if (proc.frameId != null && !proc.frameId.equals(report.getFrame().getFrameId())) {
@@ -236,10 +293,73 @@ public class FrameCompleteHandler {
                     + " has already moved on to frame " + proc.frameId + ".");
             return;
         }
+
+        FrameDetail frameDetail = null;
+        try {
+            frameDetail = jobManager.getFrameDetail(report.getFrame().getFrameId());
+        } catch (EmptyResultDataAccessException e) {
+            // The frame row is gone; fall through and release the proc.
+        }
+
+        /*
+         * Past the duplicate check above the report is discarded without being applied to its
+         * frame, no matter which branch below disposes of the proc, so it is counted (and a
+         * successful result flagged as lost) before any of them return.
+         */
+        if (prometheusMetrics != null) {
+            prometheusMetrics.incrementFrameCompleteDropped(report.getExitStatus());
+        }
+        if (report.getExitStatus() == 0 && frameDetail != null
+                && frameDetail.state != FrameState.SUCCEEDED
+                && frameDetail.state != FrameState.EATEN) {
+            logger.warn("A successful frame complete report for " + report.getFrame().getFrameName()
+                    + " in job " + report.getFrame().getJobName() + " from host " + proc.hostName
+                    + " could not be applied; the frame is " + frameDetail.state
+                    + " and the result of this render is being discarded.");
+        }
+
+        queueDispatchTask(key, "releaseStaleProc", () -> releaseStaleProc(proc, report));
+    }
+
+    /**
+     * Redirects or unbooks a proc whose frame complete report was stale, unless the proc is holding
+     * a live run.
+     *
+     * The proc snapshot handed to {@link #handleStaleReport} can be stale by the time the release
+     * decision is made: the dispatcher may since have assigned the proc a newer run, either the
+     * reported frame again (stopped and re-dispatched onto this same proc between this report being
+     * generated and handled) or a different frame entirely. Releasing the proc deletes its row with
+     * no fence on the current assignment, which would orphan that live run, so the proc is re-read
+     * here and the report is dropped whenever the fresh read shows any frame assigned; the newer
+     * run's own report will release the proc when it ends.
+     *
+     * The re-read runs on the dispatch queue, immediately before the release it guards, rather than
+     * on the report thread: the delete is not fenced on the assignment read, so this narrows the
+     * window to the gap between the read and the delete instead of leaving it open for however long
+     * the release sat queued. It does not eliminate the window; a proc that books a new frame
+     * inside that gap can still be released out from under it.
+     */
+    private void releaseStaleProc(VirtualProc proc, FrameCompleteReport report) {
+        VirtualProc currentProc;
+        try {
+            currentProc = hostManager.getVirtualProc(proc.getProcId());
+        } catch (EmptyResultDataAccessException e) {
+            // The proc row is gone; there is nothing left to redirect or unbook.
+            return;
+        }
+        if (currentProc.frameId != null) {
+            logger.info("Dropping stale frame complete report for "
+                    + report.getFrame().getFrameName() + "; proc " + proc.getProcId()
+                    + (report.getFrame().getFrameId().equals(currentProc.frameId)
+                            ? " is running a newer instance of the same frame."
+                            : " has moved on to frame " + currentProc.frameId + "."));
+            return;
+        }
+
         if (redirectManager.hasRedirect(proc)) {
-            queueDispatchTask(key, "redirect", () -> redirectManager.redirect(proc));
+            redirectManager.redirect(proc);
         } else {
-            queueDispatchTask(key, "unbookProc", () -> dispatchSupport.unbookProc(proc));
+            dispatchSupport.unbookProc(proc);
         }
     }
 
@@ -287,6 +407,8 @@ public class FrameCompleteHandler {
             boolean unbookProc = proc.unbooked;
 
             dispatchSupport.updateUsageCounters(frame, report.getExitStatus());
+
+            applyLayerDelayRule(frame, resolveExitStatus(report, frameDetail), newFrameState);
 
             if (satisfyDependsAndCompleteLayerAndJob(job, frame, report, newFrameState)) {
                 publishLayerCompletedTelemetry(frame);
@@ -633,9 +755,9 @@ public class FrameCompleteHandler {
             // No proc owns the frame: it is genuinely orphaned, proceed with finalizing it.
         }
 
-        int exitStatus = resolveExitStatus(report, frameDetail);
+        final int exitStatus = resolveExitStatus(report, frameDetail);
         final FrameState newFrameState =
-                determineFrameState(job, layer, frame, report, frameDetail);
+                determineFrameState(job, layer, frame, report, frameDetail, delayRules);
 
         if (!dispatchSupport.stopFrame(frame, newFrameState, exitStatus,
                 report.getFrame().getMaxRss())) {
@@ -650,10 +772,11 @@ public class FrameCompleteHandler {
         final String key = job.getJobId() + "_" + report.getFrame().getLayerId() + "_"
                 + report.getFrame().getFrameId();
         if (dispatcher.isTestMode()) {
-            handleOrphanedPostFrameComplete(report, job, frame, newFrameState);
+            handleOrphanedPostFrameComplete(report, job, frame, newFrameState, exitStatus);
         } else {
             queueDispatchTask(key, "handleOrphanedPostFrameComplete",
-                    () -> handleOrphanedPostFrameComplete(report, job, frame, newFrameState));
+                    () -> handleOrphanedPostFrameComplete(report, job, frame, newFrameState,
+                            exitStatus));
         }
     }
 
@@ -668,14 +791,51 @@ public class FrameCompleteHandler {
      * reservation.
      */
     private void handleOrphanedPostFrameComplete(FrameCompleteReport report, DispatchJob job,
-            DispatchFrame frame, FrameState newFrameState) {
+            DispatchFrame frame, FrameState newFrameState, int exitStatus) {
         if (prometheusMetrics != null) {
             prometheusMetrics.recordFrameCompleted(newFrameState.name(), frame.show, frame.shot);
         }
 
         dispatchSupport.updateUsageCounters(frame, report.getExitStatus());
 
+        applyLayerDelayRule(frame, exitStatus, newFrameState);
+
         satisfyDependsAndCompleteLayerAndJob(job, frame, report, newFrameState);
+    }
+
+    /**
+     * Writes the layer-level backoff for an exit status configured in dispatcher.layer_delay.rules:
+     * pushes the layer's start-after gate a configured duration into the future so no frame of the
+     * layer re-books while the underlying condition (typically a license shortage) persists. The
+     * write is conditional monotonic, so an operator-set later time survives and the burst of
+     * reports from a layer's in-flight frames collapses into a single write.
+     *
+     * Skipped when the frame was EATEN: auto-eat wins over the delay rule, and nothing is going to
+     * retry an eaten frame, so a delay would only stretch the eating out and keep the job from
+     * finishing.
+     *
+     * Runs on the dispatch threadpool, so a queue rejection can drop the write. That is acceptable
+     * and self-healing: the condition persists, the layer re-books, and the next matching report
+     * writes the delay.
+     */
+    private void applyLayerDelayRule(DispatchFrame frame, int exitStatus,
+            FrameState newFrameState) {
+        if (newFrameState.equals(FrameState.EATEN)) {
+            return;
+        }
+        Duration backoff = delayRules.get(exitStatus);
+        if (backoff == null) {
+            return;
+        }
+        boolean delayed = layerDao.delayLayerForBackoff((LayerInterface) frame, backoff,
+                "Automatic backoff: exit status " + exitStatus);
+        if (delayed) {
+            logger.info("Delayed layer " + frame.getLayerId() + " for " + backoff.toMinutes()
+                    + " minutes: exit status " + exitStatus + " on frame " + frame.getName());
+            if (prometheusMetrics != null) {
+                prometheusMetrics.recordLayerDelay(exitStatus);
+            }
+        }
     }
 
     /**
@@ -772,15 +932,23 @@ public class FrameCompleteHandler {
      * (reported by rqd or stored on the frame by a Cuebot-initiated memory kill, see
      * {@link #resolveExitStatus}) are retried even when the retry count is exhausted.
      *
+     * An exit status configured in delayRules (dispatcher.layer_delay.rules) sends the frame back
+     * to Waiting unconditionally: the layer-level start-after backoff written by the caller is what
+     * prevents an immediate re-book, and the status is excluded from retry counting. Auto-eat still
+     * wins over a delay rule, and a delay-rule frame is deliberately immune to the timeout checks
+     * below (a matching failure exits in seconds, so timeouts are moot).
+     *
      * @param job
      * @param layer
      * @param frame
      * @param report
      * @param frameDetail
+     * @param delayRules exit statuses that defer the layer instead of failing the frame
      * @return
      */
     public static final FrameState determineFrameState(DispatchJob job, LayerDetail layer,
-            DispatchFrame frame, FrameCompleteReport report, FrameDetail frameDetail) {
+            DispatchFrame frame, FrameCompleteReport report, FrameDetail frameDetail,
+            Map<Integer, Duration> delayRules) {
         if (EnumSet.of(FrameState.WAITING, FrameState.EATEN).contains(frame.state)) {
             return frame.state;
         }
@@ -806,6 +974,9 @@ public class FrameCompleteHandler {
         }
         if (job.autoEat) {
             return FrameState.EATEN;
+        }
+        if (delayRules.containsKey(resolveExitStatus(report, frameDetail))) {
+            return FrameState.WAITING;
         }
 
         // Log update (LLU) and run time timeouts.
@@ -1016,6 +1187,14 @@ public class FrameCompleteHandler {
 
     public void setShowDao(ShowDao showDao) {
         this.showDao = showDao;
+    }
+
+    public LayerDao getLayerDao() {
+        return layerDao;
+    }
+
+    public void setLayerDao(LayerDao layerDao) {
+        this.layerDao = layerDao;
     }
 
     public KafkaEventPublisher getKafkaEventPublisher() {

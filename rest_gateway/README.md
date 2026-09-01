@@ -14,21 +14,24 @@ OpenCue REST Gateway - a production-ready HTTP/REST interface for OpenCue's gRPC
    - [Quick Start](#quick-start)
    - [Docker Deployment](#docker-deployment)
    - [Local Development](#local-development)
-3. [Configuration](#configuration)
+3. [API Documentation (Swagger UI)](#api-documentation-swagger-ui)
+   - [Trying Requests From the Browser](#trying-requests-from-the-browser)
+   - [Security Considerations](#security-considerations)
+4. [Configuration](#configuration)
    - [Environment Variables](#environment-variables)
    - [Deployment Examples](#deployment-examples)
    - [Security Configuration](#security-configuration)
-4. [Authentication & Authorization](#authentication--authorization)
+5. [Authentication & Authorization](#authentication--authorization)
    - [JWT Token System](#jwt-token-system)
    - [Token Requirements](#token-requirements)
    - [Creating Tokens](#creating-tokens)
    - [Token Validation](#token-validation)
-5. [API Reference](#api-reference)
+6. [API Reference](#api-reference)
    - [Endpoint Structure](#endpoint-structure)
    - [Request Format](#request-format)
    - [Response Format](#response-format)
    - [Available Interfaces](#available-interfaces)
-6. [Complete Endpoint Examples](#complete-endpoint-examples)
+7. [Complete Endpoint Examples](#complete-endpoint-examples)
    - [Show Interface](#show-interface)
    - [Job Interface](#job-interface)
    - [Frame Interface](#frame-interface)
@@ -38,38 +41,38 @@ OpenCue REST Gateway - a production-ready HTTP/REST interface for OpenCue's gRPC
    - [Owner Interface](#owner-interface)
    - [Proc Interface](#proc-interface)
    - [Deed Interface](#deed-interface)
-7. [Testing](#testing)
+8. [Testing](#testing)
    - [Unit Testing](#unit-testing)
    - [Integration Testing](#integration-testing)
    - [Load Testing](#load-testing)
    - [Testing with Live Cuebot](#testing-with-live-cuebot)
-8. [Development](#development)
+9. [Development](#development)
    - [Building from Source](#building-from-source)
    - [Code Generation](#code-generation)
    - [Adding New Interfaces](#adding-new-interfaces)
    - [Contributing](#contributing)
-9. [Deployment](#deployment)
+10. [Deployment](#deployment)
    - [Production Deployment](#production-deployment)
    - [Docker Deployment](#docker-deployment-1)
    - [Kubernetes Deployment](#kubernetes-deployment)
    - [Load Balancing](#load-balancing)
-10. [Monitoring & Observability](#monitoring--observability)
+11. [Monitoring & Observability](#monitoring--observability)
     - [Health Checks](#health-checks)
     - [Metrics](#metrics)
     - [Logging](#logging)
     - [Distributed Tracing](#distributed-tracing)
-11. [Troubleshooting](#troubleshooting)
+12. [Troubleshooting](#troubleshooting)
     - [Common Issues](#common-issues)
     - [Debug Mode](#debug-mode)
     - [Performance Issues](#performance-issues)
     - [Error Codes](#error-codes)
-12. [Best Practices](#best-practices)
+13. [Best Practices](#best-practices)
     - [Security](#security)
     - [Performance](#performance)
     - [Error Handling](#error-handling)
     - [Rate Limiting](#rate-limiting)
-13. [FAQ](#faq)
-14. [Appendices](#appendices)
+14. [FAQ](#faq)
+15. [Appendices](#appendices)
     - [Protocol Buffer Definitions](#protocol-buffer-definitions)
     - [gRPC Service Mapping](#grpc-service-mapping)
     - [Change Log](#change-log)
@@ -101,7 +104,7 @@ Built with Go and the [grpc-gateway](https://github.com/grpc-ecosystem/grpc-gate
 - Docker containerization with Rocky Linux base
 - Environment-based configuration
 - Comprehensive error handling and logging
-- All endpoints require JWT authentication for security
+- All API endpoints require JWT authentication for security (the Swagger UI on `/swagger/` is served without a token)
 - Graceful shutdown and connection management
 
 #### **Performance Optimized**
@@ -371,7 +374,7 @@ export OPENCUE_REST_GATEWAY_URL=http://localhost:8448
 ```
 
 **Important Notes:**
-- **All endpoints require JWT authentication** - there are no public health endpoints
+- **All API endpoints require JWT authentication** - there are no public health endpoints. The Swagger UI on `/swagger/` is the only unauthenticated route
 - The secret key must exactly match your REST Gateway's `JWT_SECRET` environment variable
 - Check your container configuration: `docker inspect opencue-rest-gateway-live | grep JWT_SECRET`
 
@@ -1177,6 +1180,71 @@ This seamless conversion and security process allows the Opencue Rest Gateway to
 
 [Back to Contents](#contents)
 
+## API Documentation (Swagger UI)
+
+The gateway serves an interactive Swagger UI at `http://localhost:8448/swagger/`, listing every OpenCue interface with its request and response schemas.
+
+The OpenAPI documents are generated from `proto/src/*.proto` by `protoc-gen-openapiv2` during the Docker build and written to the directory named by `SWAGGER_DIR`. All Swagger UI assets are served from the gateway itself, so the page works on an air-gapped network.
+
+| Route | Serves |
+|-------|--------|
+| `/swagger/` | The Swagger UI page |
+| `/swagger/specs/<name>.json` | A single generated OpenAPI document |
+| `/swagger/assets/` | The Swagger UI JavaScript and CSS |
+
+### Trying Requests From the Browser
+
+Click **Authorize**, paste a JWT (see [Authentication](#authentication)), and use **Try it out** on any endpoint. The `Bearer` prefix is optional; the page adds it if you leave it off.
+
+```bash
+# Must match the gateway's JWT_SECRET. The Docker image defaults to
+# 'default-secret-key'; docker-compose.yml uses
+# 'opencue-dev-jwt-secret-change-in-production'.
+export JWT_SECRET=default-secret-key
+
+# Generate a token, then paste it into Authorize
+export JWT_TOKEN=$(python3 -c "
+import base64, hmac, hashlib, json, os, time
+header = {'alg': 'HS256', 'typ': 'JWT'}
+payload = {'sub': 'user', 'exp': int(time.time()) + 3600}
+h = base64.urlsafe_b64encode(json.dumps(header).encode()).decode().rstrip('=')
+p = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')
+m = f'{h}.{p}'
+secret = os.environ['JWT_SECRET'].encode()
+s = base64.urlsafe_b64encode(hmac.new(secret, m.encode(), hashlib.sha256).digest()).decode().rstrip('=')
+print(f'{m}.{s}')
+")
+echo $JWT_TOKEN
+```
+
+If the gateway rejects the token with `401`, the secret does not match. Read the
+value the running container was started with:
+
+```bash
+docker inspect opencue-rest-gateway \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep '^JWT_SECRET='
+```
+
+### Security Considerations
+
+> **The Swagger UI is served without authentication.** It is mounted outside the JWT middleware so the API can be browsed, which means anyone who can reach the gateway's port can read the complete API surface. The API endpoints themselves are unaffected and still reject unauthenticated requests.
+
+Set `SWAGGER_ENABLED=false` wherever the gateway is reachable beyond a trusted network:
+
+```bash
+docker run -d --name opencue-rest-gateway \
+  -e CUEBOT_ENDPOINT=cuebot:8443 \
+  -e REST_PORT=8448 \
+  -e JWT_SECRET=your-secret-key \
+  -e SWAGGER_ENABLED=false \
+  -p 8448:8448 \
+  opencue/rest-gateway:latest
+```
+
+Accepted false values are `false`, `0`, `no` and `off` (case-insensitive). When disabled, or when `SWAGGER_DIR` does not exist, the `/swagger/` routes are not mounted at all and requests fall through to the authenticated handler.
+
+[Back to Contents](#contents)
+
 ## Configuration
 
 The OpenCue REST Gateway is configured entirely through environment variables, making it suitable for containerized deployments and different environments.
@@ -1195,6 +1263,8 @@ The OpenCue REST Gateway is configured entirely through environment variables, m
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
+| `SWAGGER_ENABLED` | No | `true` | Serve the Swagger UI on `/swagger/`. See [API Documentation (Swagger UI)](#api-documentation-swagger-ui) |
+| `SWAGGER_DIR` | No | `./gen/openapiv2` | Directory holding the generated OpenAPI documents (set to `/app/gen/openapiv2` in the Docker image) |
 | `LOG_LEVEL` | No | `info` | Logging level (debug, info, warn, error) |
 | `GRPC_TIMEOUT` | No | `30s` | Timeout for gRPC calls to Cuebot |
 | `HTTP_TIMEOUT` | No | `60s` | HTTP request timeout |
@@ -1655,7 +1725,7 @@ Go back to [Contents](#contents).
 
 ## Authentication
 
-The REST Gateway uses JSON Web Tokens (JWT) for secure authentication. All endpoints require a valid JWT token in the Authorization header.
+The REST Gateway uses JSON Web Tokens (JWT) for secure authentication. All API endpoints require a valid JWT token in the Authorization header. The Swagger UI on `/swagger/` is the only route served without one.
 
 ### JWT Token Requirements
 
@@ -2367,7 +2437,7 @@ protoc -I ../../proto/src/ \
 curl http://localhost:8448/health
 # Response: Authorization header required
 ```
-- **This is NORMAL**: The REST Gateway has no unauthenticated endpoints
+- **This is NORMAL**: the REST Gateway has no unauthenticated API endpoints (`/swagger/` is documentation only)
 - **For health checks**: Use TCP checks or authenticated endpoint requests
 - **Expected response**: 401 Unauthorized means the service is running correctly
 
@@ -2411,7 +2481,7 @@ export LOG_LEVEL=debug
 
 ### Service Health Checks
 
-**Important:** The OpenCue REST Gateway has NO unauthenticated endpoints. All endpoints require JWT authentication.
+**Important:** Every OpenCue REST Gateway API endpoint requires JWT authentication. The only unauthenticated routes are the Swagger UI and OpenAPI documents under `/swagger/`, which can be turned off with `SWAGGER_ENABLED=false`.
 
 ```bash
 # Check if gateway is responding (expects 401 - this means service is up)

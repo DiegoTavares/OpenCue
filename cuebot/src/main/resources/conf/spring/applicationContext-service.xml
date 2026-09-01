@@ -204,6 +204,7 @@
     <property name="bookingDao" ref="bookingDao" />
     <property name="kafkaEventPublisher" ref="kafkaEventPublisher" />
     <property name="monitoringEventBuilder" ref="monitoringEventBuilder" />
+    <property name="prometheusMetrics" ref="prometheusMetricsCollector" />
   </bean>
 
   <bean id="filterManager" class="com.imageworks.spcue.service.FilterManagerService">
@@ -306,6 +307,7 @@
     <property name="dispatchQueue" ref="dispatchQueue" />
     <property name="reportQueue" ref="reportQueue" />
     <property name="hostManager" ref="hostManager" />
+    <property name="layerDao" ref="layerDao" />
   </bean>
 
   <bean id="historicalManager" class="com.imageworks.spcue.service.HistoricalManagerService">
@@ -393,6 +395,7 @@
     <property name="whiteboardDao" ref="whiteboardDao" />
     <property name="serviceDao" ref="serviceDao" />
     <property name="showDao" ref="showDao" />
+    <property name="layerDao" ref="layerDao" />
     <property name="kafkaEventPublisher" ref="kafkaEventPublisher" />
     <property name="prometheusMetrics" ref="prometheusMetricsCollector" />
     <property name="monitoringEventBuilder" ref="monitoringEventBuilder" />

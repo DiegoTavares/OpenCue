@@ -93,6 +93,31 @@ graph LR
 5. **Response Translation**: gRPC response converted back to JSON
 6. **HTTP Response**: Formatted JSON returned to client
 
+### Self-Describing API
+
+The same `.proto` files that generate the gateway's HTTP handlers also generate an OpenAPI (Swagger) definition for every OpenCue interface. These definitions are produced at build time by `protoc-gen-openapiv2` and packaged into the gateway image. Because both come from one source, the documented paths and message schemas can never drift from the handlers. That shared source does not, however, guarantee that every generated method is routed; see below.
+
+The gateway serves those definitions, and a Swagger UI that renders them, under `/swagger/`:
+
+![Swagger UI listing the ShowInterface endpoints](/assets/images/rest_gateway/swagger/swagger_ui_overview.png)
+
+This makes the gateway self-describing: a client that can reach it can discover the complete set of interfaces, methods, request bodies, and response schemas without any external documentation. All Swagger UI assets are served by the gateway itself, so the page works on an isolated network.
+
+There is one nuance to be aware of. The definitions are generated with `generate_unbound_methods=true`, which emits an entry for every method in every `.proto` file, whereas the gateway registers handlers for a chosen subset. The published surface is therefore slightly wider than the routed one: 304 endpoints across 28 interfaces are described, and 273 across 22 interfaces are reachable. The remaining 31 endpoints return `404` simply because this gateway does not register them, and they fall into two groups. `RqdInterface` and `RunningFrame` are implemented by the RQD agent on each host rather than by Cuebot, so the gateway has nothing to forward them to. `CueInterface`, `MonitoringInterface`, `RenderPartitionInterface`, and `RqdReportInterface` are Cuebot services, but they are internal or agent-facing rather than intended for REST clients. The [API reference](/docs/reference/rest-api-reference/#definitions-the-gateway-does-not-route) lists them.
+
+### Documentation and the Authentication Boundary
+
+The `/swagger/` routes sit deliberately **outside** the JWT middleware. Documentation is browsable anonymously; the API is not:
+
+| Route | Authentication |
+|-------|----------------|
+| `/swagger/`, `/swagger/specs/`, `/swagger/assets/` | None |
+| Every `/<interface>/<method>` API route | JWT required |
+
+This is a considered trade-off. It makes the API easy to explore and test, but it also means anyone who can reach the gateway's port can read the complete API surface, including the interfaces, the method names, and the message schemas. No data is exposed, and no operation can be performed without a valid token, but the shape of the system is visible.
+
+Deployments where the gateway is reachable beyond a trusted network should set `SWAGGER_ENABLED=false`, which unmounts the routes entirely, or restrict `/swagger/` at the reverse proxy. See [Deploying the REST Gateway](/docs/other-guides/deploying-rest-gateway/) for the production configuration.
+
 ---
 
 ## Authentication and Security
