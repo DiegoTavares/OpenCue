@@ -1202,6 +1202,7 @@ public class WhiteboardDaoJdbc extends JdbcDaoSupport implements WhiteboardDao {
                     .setMemoryOptimizerEnabled(rs.getBoolean("b_optimize"))
                     .setTimeout(rs.getInt("int_timeout"))
                     .setTimeoutLlu(rs.getInt("int_timeout_llu"))
+                    .setStuckDetectionLlu(rs.getInt("int_stuck_detection_llu"))
                     // layer.ts_eligible is NOT NULL by schema (defaults to layer creation time), so
                     // no submission-time fallback is needed.
                     .setEligibleTime(getEligibleTimeInEpoch(rs, null));
@@ -1443,6 +1444,7 @@ public class WhiteboardDaoJdbc extends JdbcDaoSupport implements WhiteboardDao {
                             ServiceDaoJdbc.splitTags(SqlUtil.getString(rs, "str_tags"))))
                     .setTimeout(rs.getInt("int_timeout"))
                     .setTimeoutLlu(rs.getInt("int_timeout_llu"))
+                    .setStuckDetectionLlu(rs.getInt("int_stuck_detection_llu"))
                     .setMinMemoryIncrease(rs.getInt("int_min_memory_increase")).build();
         }
     };
@@ -1464,6 +1466,7 @@ public class WhiteboardDaoJdbc extends JdbcDaoSupport implements WhiteboardDao {
                                     ServiceDaoJdbc.splitTags(SqlUtil.getString(rs, "str_tags"))))
                             .setTimeout(rs.getInt("int_timeout"))
                             .setTimeoutLlu(rs.getInt("int_timeout_llu"))
+                            .setStuckDetectionLlu(rs.getInt("int_stuck_detection_llu"))
                             .setMinMemoryIncrease(rs.getInt("int_min_memory_increase")).build();
                     return ServiceOverride.newBuilder()
                             .setId(SqlUtil.getString(rs, "pk_show_service")).setData(data).build();
@@ -2158,6 +2161,7 @@ public class WhiteboardDaoJdbc extends JdbcDaoSupport implements WhiteboardDao {
                 + "service.str_tags,"
                 + "service.int_timeout,"
                 + "service.int_timeout_llu,"
+                + "service.int_stuck_detection_llu,"
                 + "service.int_min_memory_increase "
             + "FROM "
                 + "service ";
@@ -2178,6 +2182,7 @@ public class WhiteboardDaoJdbc extends JdbcDaoSupport implements WhiteboardDao {
                 + "show_service.str_tags,"
                 + "show_service.int_timeout,"
                 + "show_service.int_timeout_llu,"
+                + "show_service.int_stuck_detection_llu,"
                 + "show_service.int_min_memory_increase "
             + "FROM "
                 + "show_service, "
