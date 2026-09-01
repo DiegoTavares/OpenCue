@@ -401,6 +401,9 @@ service LayerInterface {
     // Set whether the LLU timeout for frames in the layer
     rpc SetTimeoutLLU(LayerSetTimeoutLLURequest) returns (LayerSetTimeoutLLUResponse);
 
+    // Set the stuck-detection threshold (minutes without progress) for frames in the layer
+    rpc SetStuckDetectionLLU(LayerSetStuckDetectionLLURequest) returns (LayerSetStuckDetectionLLUResponse);
+
     // Staggers the specified frame range.
     rpc StaggerFrames(LayerStaggerFramesRequest) returns (LayerStaggerFramesResponse);
 }
@@ -744,6 +747,9 @@ message Layer {
     // Read-only. The per-frame memory (KB) the scheduler last booked this layer at, on
     // scheduler-managed shows; 0 = not sized yet.
     int64 booked_memory = 28;
+    // Minutes without progress (log, CPU, or IO) before RQD kills a frame as stuck.
+    // 0 = stuck detection disabled. Sourced from the layer's service.
+    int32 stuck_detection_llu = 29;
 }
 
 message LayerSeq {
@@ -1846,6 +1852,14 @@ message LayerSetTimeoutLLURequest {
 }
 
 message LayerSetTimeoutLLUResponse {} // Empty
+
+// SetStuckDetectionLLU
+message LayerSetStuckDetectionLLURequest {
+    Layer layer = 1;
+    int32 stuck_detection_llu = 2;
+}
+
+message LayerSetStuckDetectionLLUResponse {} // Empty
 
 
 // StaggerFrames

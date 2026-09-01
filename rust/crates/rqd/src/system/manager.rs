@@ -56,6 +56,21 @@ pub trait SystemManager {
         log_path: String,
     ) -> Result<Option<ProcessStats>>;
 
+    /// Collects progress counters over a frame's processes (its session or cgroup), used by
+    /// stuck-frame detection. Returns None when the signals are unavailable (non-Linux
+    /// platforms, or no live process found), in which case the frame must never be flagged.
+    fn collect_frame_progress(&self, launch_id: &Uuid, pid: u32) -> Option<FrameProgress> {
+        let _ = (launch_id, pid);
+        None
+    }
+
+    /// Collects per-process blocking evidence (state, wchan, current syscall) for the
+    /// stuck-kill log footer. Best effort; empty when unavailable.
+    fn collect_frame_evidence(&self, launch_id: &Uuid, pid: u32) -> Vec<String> {
+        let _ = (launch_id, pid);
+        Vec::new()
+    }
+
     /// Update info about procs currently active
     fn refresh_procs(&self);
 
@@ -135,6 +150,22 @@ pub struct MachineGpuStats {
     pub free_memory: u64,
     /// Used memory by unit of each GPU, where the key in the HashMap is the unit ID, and the value is the used memory
     pub _used_memory_by_unit: HashMap<u32, u64>,
+}
+
+/// Progress counters aggregated over a frame's processes, compared between monitor
+/// cycles by stuck-frame detection. Any change in any field counts as progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameProgress {
+    /// Sum of utime+stime (clock ticks) over every live process of the frame. None when
+    /// the counters could not be read for any process, which disables the verdict entirely
+    /// (the CPU signal is required for a frame to ever be flagged).
+    pub cpu_time: Option<u64>,
+    /// Sum of read_bytes+write_bytes from /proc/<pid>/io. None when unreadable (needs
+    /// PTRACE_MODE_READ); an absent IO signal is simply not compared, never counted as zero.
+    pub io_bytes: Option<u64>,
+    /// Hash of the frame's (pid, starttime) set. A fork or an exit changes it, and
+    /// starttime guards against pid reuse looking like continuity.
+    pub composition: u64,
 }
 
 /// Tracks memory and runtime statistics for a rendering process and its children.

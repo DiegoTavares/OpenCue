@@ -440,6 +440,11 @@ public class JobSpec {
                 layer.timeout_llu = Integer.parseInt(layerTag.getChildTextTrim("timeout_llu"));
             }
 
+            if (layerTag.getChildTextTrim("stuck_detection_llu") != null) {
+                layer.stuck_detection_llu =
+                        Integer.parseInt(layerTag.getChildTextTrim("stuck_detection_llu"));
+            }
+
             /*
              * Handle the layer environment
              */
@@ -734,6 +739,7 @@ public class JobSpec {
         layer.limits.addAll(limits);
         layer.timeout = primaryService.timeout;
         layer.timeout_llu = primaryService.timeout_llu;
+        layer.stuck_detection_llu = primaryService.stuck_detection_llu;
     }
 
     private void determineOutputs(Element layerTag, BuildableJob job, LayerDetail layer) {

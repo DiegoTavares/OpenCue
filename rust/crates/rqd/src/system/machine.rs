@@ -19,6 +19,7 @@ use crate::{
     frame::manager,
     report::report_client,
     system::oom::{self, OOM_REASON_MSG},
+    system::STUCK_REASON_MSG,
 };
 use async_trait::async_trait;
 use bytesize::KIB;
@@ -859,6 +860,8 @@ impl MachineMonitor {
         let mut finished_frames: Vec<Arc<RunningFrame>> = Vec::new();
         let mut running_frames: Vec<(Arc<RunningFrame>, RunningState)> = Vec::new();
         let mut memory_aggressors: Vec<(Arc<RunningFrame>, u64)> = Vec::new();
+        // (frame, wrapper pid, time without progress, threshold)
+        let mut stuck_frames: Vec<(Arc<RunningFrame>, u32, Duration, Duration)> = Vec::new();
 
         // Only keep running frames on the cache and store a copy of their state
         // to avoid having to deal with the state lock
@@ -881,13 +884,20 @@ impl MachineMonitor {
 
         // Collect stats about the procs related to each frame. This reads /proc and stats the
         // frame log (possibly on a network filesystem), so it runs on the blocking pool.
-        let frame_procs: Vec<(Uuid, u32, String)> = running_frames
+        //
+        // Stuck-frame detection is opt-in per frame via RunFrame.stuck_detection_llu (minutes;
+        // 0 = never inspect). Its progress counters are only collected for opted-in frames.
+        let frame_procs: Vec<(Uuid, u32, String, bool)> = running_frames
             .iter()
             .map(|(running_frame, running_state)| {
+                let inspect_progress = CONFIG.runner.stuck_detection_enabled
+                    && !CONFIG.runner.run_on_docker
+                    && running_frame.request.stuck_detection_llu > 0;
                 (
                     running_frame.launch_id,
                     running_state.pid,
                     running_frame.log_path.clone(),
+                    inspect_progress,
                 )
             })
             .collect();
@@ -895,13 +905,16 @@ impl MachineMonitor {
         let all_proc_stats = tokio::task::spawn_blocking(move || {
             frame_procs
                 .into_iter()
-                .map(|(launch_id, pid, log_path)| {
-                    system_manager
+                .map(|(launch_id, pid, log_path, inspect_progress)| {
+                    let stats = system_manager
                         .collect_proc_stats(&launch_id, pid, log_path)
                         .unwrap_or_else(|err| {
                             warn!("Failed to collect proc_stats. {}", err);
                             None
-                        })
+                        });
+                    let progress = inspect_progress
+                        .then(|| system_manager.collect_frame_progress(&launch_id, pid));
+                    (stats, progress)
                 })
                 .collect::<Vec<_>>()
         })
@@ -909,7 +922,7 @@ impl MachineMonitor {
         .map_err(|err| miette!("Proc stats collection task failed: {err}"))?;
 
         // Handle Running frames separately to avoid deadlocks when trying to get a frame state
-        for ((running_frame, running_state), proc_stats_opt) in
+        for ((running_frame, running_state), (proc_stats_opt, progress_opt)) in
             running_frames.iter().zip(all_proc_stats)
         {
             if let Some(proc_stats) = proc_stats_opt {
@@ -922,6 +935,24 @@ impl MachineMonitor {
 
                 // Update stats for running frames
                 running_frame.update_frame_stats(proc_stats);
+
+                // Stuck-frame detection. Signals are only provided by the Linux system manager;
+                // observe_progress fails open whenever a signal is unavailable.
+                if let Some(progress) = progress_opt {
+                    if let Some(no_progress) = running_frame.observe_progress(progress) {
+                        let threshold = Duration::from_secs(
+                            running_frame.request.stuck_detection_llu as u64 * 60,
+                        );
+                        if no_progress > threshold {
+                            stuck_frames.push((
+                                Arc::clone(running_frame),
+                                running_state.pid,
+                                no_progress,
+                                threshold,
+                            ));
+                        }
+                    }
+                }
             } else if running_frame.is_dangling_expired() {
                 // Frama proc was not found to be running even after a grace period
                 warn!(
@@ -1013,6 +1044,56 @@ impl MachineMonitor {
                 }
             }
             _ => (),
+        }
+
+        // Kill frames flagged as stuck. Mirrors the OOM path: freeze stats first so the
+        // reported usage isn't corrupted by reading dying processes, write the evidence
+        // footer while the session is still inspectable, then route through the frame
+        // manager so the kill gets the standard confirm/escalate treatment.
+        //
+        // Each kill runs on a detached task: the footer lands on the frame log, which may
+        // live on the very filesystem hang that got the frame stuck, and blocking the
+        // monitor loop on it would stop host reports for the whole host (Cuebot would mark
+        // it DOWN and kill every frame on it). Freezing stats inline also keeps the next
+        // monitor cycle from re-flagging the frame while its kill task is in flight.
+        for (frame, pid, no_progress, threshold) in stuck_frames {
+            frame.freeze_stats();
+            let system_manager = Arc::clone(&self.system_manager);
+            tokio::spawn(async move {
+                let launch_id = frame.launch_id;
+                let evidence = tokio::task::spawn_blocking(move || {
+                    system_manager.collect_frame_evidence(&launch_id, pid)
+                })
+                .await
+                .unwrap_or_default();
+                // The footer write is synchronous file IO that can wedge on the same hung
+                // mount; hand it to the blocking pool so the kill is never gated on it.
+                let footer_frame = Arc::clone(&frame);
+                tokio::task::spawn_blocking(move || {
+                    footer_frame.write_stuck_footer(no_progress, threshold, &evidence);
+                });
+                let kill_result = match manager::instance().await {
+                    Ok(manager) => {
+                        warn!(
+                            "Killing stuck frame {}: no progress for {}s (threshold {}s)",
+                            frame,
+                            no_progress.as_secs(),
+                            threshold.as_secs()
+                        );
+                        manager
+                            .kill_running_frame(&frame.frame_id, STUCK_REASON_MSG.to_string())
+                            .await
+                    }
+                    Err(err) => Err(err),
+                };
+                if let Err(err) = kill_result {
+                    warn!("Failed to kill stuck frame {}. {}", frame, err);
+                    // Unfreeze so the next monitor cycle re-detects the frame and retries
+                    // the kill. observe_progress skips frozen frames, so leaving stats
+                    // frozen here would orphan the process forever with dead reporting.
+                    frame.unfreeze_stats();
+                }
+            });
         }
 
         // Sanitize dangling reservations
