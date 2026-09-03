@@ -1,12 +1,14 @@
 ---
 title: "Distributed Scheduler Technical Reference"
-nav_order: 101
-parent: "Developer Guide"
+nav_order: 120
+parent: Reference
 layout: default
 linkTitle: "Distributed Scheduler"
 date: 2026-05-29
 description: >
   Technical reference for the OpenCue Distributed Scheduler architecture and implementation
+redirect_from:
+  - /docs/developer-guide/scheduler/
 ---
 
 # Distributed Scheduler Technical Reference

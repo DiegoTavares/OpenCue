@@ -1,6 +1,6 @@
 ---
 title: "OpenCueWeb Tutorial"
-nav_order: 85
+nav_order: 120
 parent: Tutorials
 layout: default
 linkTitle: "Getting Started with OpenCueWeb"

@@ -1,13 +1,15 @@
 ---
 title: "Scheduler Stress Testing"
-nav_order: 103
-parent: "Developer Guide"
+nav_order: 140
+parent: Reference
 layout: default
 linkTitle: "Scheduler Stress Testing"
 date: 2026-06-12
 description: >
   How to run, tune, and interpret the Rust scheduler's booking and accounting
   stress suite, locally and in CI
+redirect_from:
+  - /docs/developer-guide/scheduler-stress-testing/
 ---
 
 # Scheduler Stress Testing

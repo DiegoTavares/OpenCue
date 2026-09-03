@@ -1,13 +1,15 @@
 ---
 title: "Scheduler Accounting Reference"
-nav_order: 102
-parent: "Developer Guide"
+nav_order: 130
+parent: Reference
 layout: default
 linkTitle: "Scheduler Accounting"
 date: 2026-06-26
 description: >
   Technical reference for the in-memory accounting subsystem in the Rust scheduler and the
   PostgreSQL LISTEN/NOTIFY feed from Cuebot
+redirect_from:
+  - /docs/developer-guide/scheduler-accounting/
 ---
 
 # Scheduler Accounting Reference
