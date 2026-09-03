@@ -59,6 +59,7 @@ import com.imageworks.spcue.grpc.job.FrameState;
 import com.imageworks.spcue.grpc.job.JobState;
 import com.imageworks.spcue.grpc.job.Order;
 import com.imageworks.spcue.grpc.limit.Limit;
+import com.imageworks.spcue.grpc.limit.LimitBindSource;
 import com.imageworks.spcue.util.CueUtil;
 import com.imageworks.spcue.util.FrameSet;
 import com.imageworks.spcue.util.JobLogUtil;
@@ -468,7 +469,7 @@ public class JobManagerService implements JobManager {
 
     @Override
     public void addLayerLimit(LayerInterface layer, String limitId) {
-        layerDao.addLimit(layer, limitId);
+        layerDao.addLimit(layer, limitId, LimitBindSource.SPEC);
     }
 
     @Override
