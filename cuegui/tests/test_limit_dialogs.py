@@ -22,7 +22,6 @@ import mock
 
 import qtpy.QtCore
 
-import opencue_proto.limit_pb2
 import opencue.exception
 import opencue.wrappers.limit
 
