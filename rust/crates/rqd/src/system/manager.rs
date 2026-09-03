@@ -137,12 +137,15 @@ pub struct MachineGpuStats {
 /// cycles by stuck-frame detection. Any change in any field counts as progress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SessionProgress {
-    /// Sum of utime+stime (clock ticks) over every live process in the session. None when
-    /// the counters could not be read for any process, which disables the verdict entirely
-    /// (the CPU signal is required for a frame to ever be flagged).
+    /// Sum of utime+stime (clock ticks) over the live processes in the session that
+    /// reported the counter. None only when no process reported one, which disables the
+    /// verdict entirely (the CPU signal is required for a frame to ever be flagged).
+    /// A process whose /proc entry cannot be read at all is absent from the session
+    /// altogether, so it also changes `composition` and therefore reads as progress.
     pub cpu_time: Option<u64>,
-    /// Sum of read_bytes+write_bytes from /proc/<pid>/io. None when unreadable (needs
-    /// PTRACE_MODE_READ); an absent IO signal is simply not compared, never counted as zero.
+    /// Sum of read_bytes+write_bytes from /proc/<pid>/io over the processes that reported
+    /// it. None only when no process did (the file needs PTRACE_MODE_READ); an absent IO
+    /// signal is simply not compared, never counted as zero.
     pub io_bytes: Option<u64>,
     /// Hash of the session's (pid, starttime) set. A fork or an exit changes it, and
     /// starttime guards against pid reuse looking like continuity.

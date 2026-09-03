@@ -180,6 +180,12 @@ pub struct RunningFrame {
     #[serde(skip_serializing)]
     #[serde(skip_deserializing)]
     stuck_tracker: Mutex<Option<StuckTracker>>,
+    /// Guards the kill footer to a single write per frame. A kill that fails unfreezes the
+    /// frame so the next monitor cycle retries, and without this the retry would append
+    /// another footer every cycle. Transient, never persisted in frame snapshots.
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
+    stuck_footer_written: AtomicBool,
 }
 
 /// Last observed progress sample and the moment any signal last moved.
@@ -322,6 +328,7 @@ impl RunningFrame {
             latest_host_mem_snapshot: RwLock::new(None),
             attached_logger: RwLock::new(None),
             stuck_tracker: Mutex::new(None),
+            stuck_footer_written: AtomicBool::new(false),
         }
     }
 
@@ -1820,12 +1827,18 @@ Render Frame Completed
     /// explanation for the frame dying with the frame-stuck status, so it renders everything
     /// RQD knows: how long nothing moved, when the log and counters last did, and what each
     /// session process was blocked on.
+    ///
+    /// Writes at most once per frame: a failed kill is retried on every subsequent monitor
+    /// cycle, and the footer describes a verdict that does not change between attempts.
     pub fn write_stuck_footer(
         &self,
         no_progress: std::time::Duration,
         threshold: std::time::Duration,
         evidence: &[String],
     ) {
+        if self.stuck_footer_written.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let logger = {
             let lock = self
                 .attached_logger
@@ -2195,6 +2208,27 @@ mod tests {
             assert!(footer.contains("frame killed as stuck"));
             assert!(footer.contains("rpc_wait_bit_killable"));
             assert!(footer.contains("303"));
+        }
+
+        #[test]
+        fn stuck_footer_is_written_only_once() {
+            let frame = frame();
+            let logger = Arc::new(TestLogger::init());
+            frame.attach_logger(logger.clone() as FrameLogger);
+            frame.observe_progress(sample(10, Some(100), 1)).unwrap();
+            let write = || {
+                frame.write_stuck_footer(
+                    Duration::from_secs(1800),
+                    Duration::from_secs(1200),
+                    &["  4711 S nfs_hog  wchan=rpc_wait_bit_killable  syscall=-".to_string()],
+                )
+            };
+            write();
+            logger.pop().expect("footer should have been written");
+            // A failed kill unfreezes the frame and the next monitor cycle retries; the
+            // footer must not be appended again.
+            write();
+            assert!(logger.pop().is_none(), "footer was written more than once");
         }
     }
 
