@@ -54,6 +54,18 @@ class CreateLimitDialogTests(unittest.TestCase):
         create_limit_mock.assert_called_once()
         self.assertEqual(0, create_limit_mock.call_args[1]['exitStatus'])
 
+    def testTypeAndModeToggleIndependently(self):
+        # Ungrouped sibling radio buttons are all mutually exclusive in Qt: without an
+        # explicit QButtonGroup per pair, checking a Type would uncheck the Mode.
+        # pylint: disable=protected-access
+        self.dialog._CreateLimitDialog__typeHost.setChecked(True)
+        self.dialog._CreateLimitDialog__modeAdvisory.setChecked(True)
+
+        self.assertTrue(self.dialog._CreateLimitDialog__typeHost.isChecked())
+        self.assertFalse(self.dialog._CreateLimitDialog__typeFrame.isChecked())
+        self.assertTrue(self.dialog._CreateLimitDialog__modeAdvisory.isChecked())
+        self.assertFalse(self.dialog._CreateLimitDialog__modeEnforced.isChecked())
+
     @mock.patch('opencue.api.createLimit')
     @mock.patch('opencue.api.findLimit',
                 new=mock.Mock(side_effect=opencue.exception.CueException('no such limit')))

@@ -58,6 +58,7 @@ import com.imageworks.spcue.util.CueUtil;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 /**
  * Failure-rule discovery, end to end: a frame failing with a limit's exit status binds its layer to
@@ -172,6 +173,17 @@ public class FrameCompleteHandlerLimitRuleTests extends TransactionalTest {
                 FrameCompleteReport.newBuilder().setFrame(info).setExitStatus(exitStatus).build());
     }
 
+    /**
+     * Asserts the backoff lands about {@code delayMinutes} in the future, with a generous tolerance
+     * for the gap between the transaction's timestamp and the wall clock.
+     */
+    private static void assertDelayedByAbout(int delayMinutes, java.sql.Timestamp startAfter) {
+        long deltaMs = startAfter.getTime() - System.currentTimeMillis();
+        long expectedMs = delayMinutes * 60_000L;
+        assertTrue("Delay of " + deltaMs + "ms is not about " + delayMinutes + " minutes",
+                Math.abs(deltaMs - expectedMs) < 90_000L);
+    }
+
     private String bindingSource(String layerId, String limitId) {
         List<String> sources = jdbcTemplate.queryForList(
                 "SELECT str_source FROM layer_limit WHERE pk_layer=? AND pk_limit_record=?",
@@ -194,6 +206,7 @@ public class FrameCompleteHandlerLimitRuleTests extends TransactionalTest {
         assertEquals("AUTO", bindingSource(layer.getLayerId(), limit.getLimitId()));
         LayerDetail delayed = layerDao.getLayerDetail(layer.getLayerId());
         assertNotNull("A claimed exit status must delay the layer", delayed.startAfter);
+        assertDelayedByAbout(5, delayed.startAfter);
         assertEquals(
                 "Automatic backoff: limit " + LIMIT_NAME + ", exit status " + LICENSE_EXIT_STATUS,
                 delayed.startAfterReason);
@@ -258,7 +271,9 @@ public class FrameCompleteHandlerLimitRuleTests extends TransactionalTest {
                 jdbcTemplate.queryForObject(
                         "SELECT COUNT(*) FROM layer_limit WHERE pk_layer=? AND pk_limit_record=?",
                         Integer.class, layer.getLayerId(), limit.getLimitId()));
-        assertNotNull(layerDao.getLayerDetail(layer.getLayerId()).startAfter);
+        LayerDetail delayed = layerDao.getLayerDetail(layer.getLayerId());
+        assertNotNull(delayed.startAfter);
+        assertDelayedByAbout(5, delayed.startAfter);
     }
 
     @Test

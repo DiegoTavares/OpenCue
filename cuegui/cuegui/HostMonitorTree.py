@@ -361,7 +361,8 @@ class HostMonitorTree(cuegui.AbstractTreeWidget.AbstractTreeWidget):
         try:
             for hold in opencue.api.getLimitHolds():
                 name = hold.limit_name
-                if hold.source == opencue.api.limit_pb2.EXTERNAL:
+                if hold.source in (opencue.api.limit_pb2.EXTERNAL,
+                                   opencue.api.limit_pb2.BOTH):
                     name = "(%s)" % name
                 hostLimits.setdefault(self.__normalizeHostName(hold.host_name), []).append(name)
         # pylint: disable=broad-except

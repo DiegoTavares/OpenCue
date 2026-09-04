@@ -148,6 +148,18 @@ public interface LimitDao {
     int clearBindings(LimitInterface limit, Set<LimitBindSource> sources);
 
     /**
+     * Atomically claim the report watermark for one limit: advances ts_reported to captureTime only
+     * when the stored watermark is absent, not newer than captureTime, and at least minIntervalMs
+     * old. This conditional update is the authoritative admission for a report; unlocked
+     * read-then-check admission would let two concurrent reporters both pass and an older snapshot
+     * overwrite a newer one.
+     *
+     * @return true when the watermark was claimed and the caller may replace the holds
+     */
+    boolean claimReportWatermark(LimitInterface limit, Timestamp captureTime, String source,
+            long minIntervalMs);
+
+    /**
      * Apply a report as a delta against the current hold set and advance the limit's settlement
      * watermark. Runs in the caller's transaction. Written as an upsert-and-sweep rather than a
      * delete-and-insert so an unchanged holder produces no new row version and the table never

@@ -76,6 +76,11 @@ class CreateLimitDialog(QtWidgets.QDialog):
             "All frames on the same machine share one license. Use for Houdini,\n"
             "Katana and other per-machine licenses. The maximum then means how\n"
             "many machines the farm may spread across.")
+        # Sibling radio buttons are all mutually exclusive by default; group each
+        # pair explicitly so Type and Mode toggle independently.
+        typeGroup = QtWidgets.QButtonGroup(self)
+        typeGroup.addButton(self.__typeFrame)
+        typeGroup.addButton(self.__typeHost)
         typeBox = QtWidgets.QVBoxLayout()
         typeBox.addWidget(self.__typeFrame)
         typeBox.addWidget(self.__typeHost)
@@ -101,6 +106,9 @@ class CreateLimitDialog(QtWidgets.QDialog):
         self.__modeAdvisory.setToolTip(
             "Advisory never holds a frame back. The license server enforces, and\n"
             "Cue still packs work onto machines that already hold a license.")
+        modeGroup = QtWidgets.QButtonGroup(self)
+        modeGroup.addButton(self.__modeEnforced)
+        modeGroup.addButton(self.__modeAdvisory)
         modeBox = QtWidgets.QVBoxLayout()
         modeBox.addWidget(self.__modeEnforced)
         modeBox.addWidget(self.__modeAdvisory)
@@ -218,13 +226,22 @@ class CreateLimitDialog(QtWidgets.QDialog):
                 name, self.__maxValue.value(), limitType=limitType, enforcement=enforcement,
                 softValue=softValue, exitStatus=exitStatus if exitStatus > 1 else 0,
                 delayMinutes=self.__delayMinutes.value(), autoTag=self.__autoTag.isChecked())
-            reportTtl = 0 if self.__noReporter.isChecked() else self.__reportTtl.value() * 60
-            if reportTtl != 900:
-                limit.setReportTtl(reportTtl)
         except opencue.exception.CueException as e:
             QtWidgets.QMessageBox.critical(
                 self, "Add Limit", "Creating limit %s failed:\n%s" % (name, e))
             return
+
+        reportTtl = 0 if self.__noReporter.isChecked() else self.__reportTtl.value() * 60
+        if reportTtl != 900:
+            try:
+                limit.setReportTtl(reportTtl)
+            except opencue.exception.CueException as e:
+                # The limit exists at this point; do not report the creation as failed.
+                QtWidgets.QMessageBox.warning(
+                    self, "Add Limit",
+                    "Limit %s was created, but setting its report TTL failed:\n%s\n\n"
+                    "It keeps the default 900-second TTL; adjust it from the limit's "
+                    "properties." % (name, e))
         self.accept()
 
 

@@ -228,6 +228,14 @@ def parse_sesictrl_json(raw):
                 user=_first_string(usage, ('user', 'username', 'owner')),
                 tokens=max(1, _first_int(usage, ('count', 'tokens', 'used')) or 1)))
 
+    if records and not totals:
+        # Records were present but none named a product we recognize: this build
+        # of sesictrl uses key names this parser does not know. Reporting the
+        # empty result would replace (clear) every external hold, so fail closed.
+        raise ReportError(
+            'no recognizable license records in sesictrl output; adapt '
+            'parse_sesictrl_json() to your version', EXIT_PARSE)
+
     logger.debug('parsed %d checkouts across %d products',
                  len(checkouts), len(totals))
     return checkouts, dict(totals)
@@ -455,8 +463,12 @@ def main(argv=None):
         capture_time = int(time.time())
 
         if args.from_file:
-            with open(args.from_file, 'r') as handle:
-                raw = handle.read()
+            try:
+                with open(args.from_file, 'r') as handle:
+                    raw = handle.read()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise ReportError(
+                    'cannot read capture file %s: %s' % (args.from_file, exc), EXIT_SESICTRL)
         else:
             raw = run_sesictrl(args.sesictrl, args.timeout, args.sesictrl_arg)
 

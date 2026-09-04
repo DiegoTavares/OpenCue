@@ -298,6 +298,35 @@ public class LimitDaoTests extends AbstractTransactionalJUnit4SpringContextTests
     @Test
     @Transactional
     @Rollback(true)
+    public void testClaimReportWatermarkIsAtomicAdmission() {
+        // The service-level OUT_OF_ORDER / RATE_LIMITED checks read the watermark without a
+        // lock; this conditional update is what actually keeps two concurrent reporters from
+        // both being admitted. Each rejection branch of the WHERE clause is exercised here.
+        LimitEntity limit = limitDao.getLimit(limitDao.createLimit(LIMIT_NAME, 50));
+        long minIntervalMs = 5000L;
+
+        assertTrue("A never-reported limit must admit the first report",
+                limitDao.claimReportWatermark(limit, now(), "test", minIntervalMs));
+
+        assertFalse("A second claim inside the interval must be rejected",
+                limitDao.claimReportWatermark(limit, now(), "test", minIntervalMs));
+
+        // Age the stored watermark past the interval; an older capture stays rejected while a
+        // fresh one is admitted.
+        Timestamp aged = new Timestamp(System.currentTimeMillis() - 60_000L);
+        jdbcTemplate.update("UPDATE limit_record SET ts_reported = ? WHERE pk_limit_record = ?",
+                aged, limit.getLimitId());
+        assertFalse("A capture older than the stored watermark must be rejected",
+                limitDao.claimReportWatermark(limit,
+                        new Timestamp(System.currentTimeMillis() - 120_000L), "test",
+                        minIntervalMs));
+        assertTrue("A fresh capture after the interval must be admitted",
+                limitDao.claimReportWatermark(limit, now(), "test", minIntervalMs));
+    }
+
+    @Test
+    @Transactional
+    @Rollback(true)
     public void testUnchangedHolderProducesNoNewRowVersion() {
         // The vacuum-churn guard: a 5-second reporter whose holders rarely change must not
         // rewrite the table every poll. An unchanged holder keeps its xmin; this regresses

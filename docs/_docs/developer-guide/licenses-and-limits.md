@@ -33,7 +33,8 @@ This guide covers the extension of that system into real license management:
 - A limit declares whether it is **enforced or advisory**.
 
 Everything is additive. An existing limit migrates to `FRAME` + `ENFORCED` with no reporter, and
-behaves exactly as it did before.
+behaves exactly as it did before. The one exception is legacy rows with `b_host_limit = true`,
+which migrate to `HOST`.
 
 > **Cuebot never talks to a license server and never checks a license out.** It observes and biases.
 > Checkout stays where it belongs: in the DCC, at frame start. The license server remains the
@@ -344,8 +345,9 @@ reversible with a single provenance-scoped delete, and discovery rate becomes me
 
 Claiming a generic status would bind most of the farm to one limit. Four guards:
 
-1. **Statuses 0 and 1 are rejected** at the API and by a `CHECK` constraint. 0 is success; 1 is the
-   conventional catch-all failure and claiming it would tag nearly every failing layer on the farm.
+1. **Statuses 0 and 1 cannot be claimed.** 0 is success and is repurposed as the clear value; 1 is
+   the conventional catch-all failure and is rejected at the API and by a `CHECK` constraint,
+   because claiming it would tag nearly every failing layer on the farm.
 2. **One limit per status**, enforced by a partial unique index. `SetFailureRule` returns
    `ALREADY_EXISTS` naming the other limit.
 3. **Bulk undo** — `ClearBindings` / *Remove Auto-Tagged Layers…* in the GUI. One statement,
@@ -590,7 +592,8 @@ finished.**
 
 ### `SetFailureRule` validation
 
-- `exit_status` must be `0` (clear) or `> 1`. Both 0 and 1 return `INVALID_ARGUMENT`.
+- `exit_status` must be `0` (clear) or `> 1`. Status 1 and negative values return
+  `INVALID_ARGUMENT`.
 - `exit_status` must not be claimed by another limit → `ALREADY_EXISTS`, naming the other limit.
 - `delay_minutes >= 0`. Zero is valid and means "tag but never delay".
 

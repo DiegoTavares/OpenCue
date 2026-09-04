@@ -407,6 +407,20 @@ public class LimitDaoJdbc extends JdbcDaoSupport implements LimitDao {
     // spotless:on
 
     @Override
+    public boolean claimReportWatermark(LimitInterface limit, Timestamp captureTime, String source,
+            long minIntervalMs) {
+        // A losing concurrent reporter blocks on the row lock here, then re-evaluates the WHERE
+        // against the winner's committed watermark and updates zero rows. That also serializes
+        // the hold rewrites that follow a successful claim.
+        return getJdbcTemplate().update(
+                "UPDATE limit_record SET ts_reported = ?, str_report_source = ? "
+                        + "WHERE pk_limit_record = ? AND (ts_reported IS NULL "
+                        + "OR (ts_reported <= ? AND ts_reported <= ?))",
+                captureTime, source, limit.getId(), captureTime,
+                new Timestamp(System.currentTimeMillis() - minIntervalMs)) == 1;
+    }
+
+    @Override
     public void replaceExternalHolds(LimitInterface limit, List<LimitHostUsage> holds,
             String source, Timestamp captureTime) {
         Timestamp batchTime = new Timestamp(System.currentTimeMillis());
@@ -467,7 +481,7 @@ public class LimitDaoJdbc extends JdbcDaoSupport implements LimitDao {
         if (name == null) {
             return "";
         }
-        String trimmed = name.trim().toLowerCase();
+        String trimmed = name.trim().toLowerCase(java.util.Locale.ROOT);
         int dot = trimmed.indexOf('.');
         return dot < 0 ? trimmed : trimmed.substring(0, dot);
     }

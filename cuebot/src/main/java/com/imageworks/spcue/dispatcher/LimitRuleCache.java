@@ -59,7 +59,7 @@ public class LimitRuleCache {
      */
     public LimitRule forExitStatus(int exitStatus) {
         long now = System.currentTimeMillis();
-        if (!loadedOnce || now - refreshedAtMs > refreshIntervalMs) {
+        if (now - refreshedAtMs > refreshIntervalMs) {
             refresh(now);
         }
         return rules.get(exitStatus);
@@ -71,7 +71,7 @@ public class LimitRuleCache {
      */
     public Map<Integer, LimitRule> all() {
         long now = System.currentTimeMillis();
-        if (!loadedOnce || now - refreshedAtMs > refreshIntervalMs) {
+        if (now - refreshedAtMs > refreshIntervalMs) {
             refresh(now);
         }
         return rules;
@@ -88,7 +88,7 @@ public class LimitRuleCache {
     }
 
     private synchronized void refresh(long now) {
-        if (loadedOnce && now - refreshedAtMs <= refreshIntervalMs) {
+        if (now - refreshedAtMs <= refreshIntervalMs) {
             return;
         }
         try {

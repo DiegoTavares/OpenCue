@@ -168,8 +168,9 @@ public class LimitDispatchGateTests extends AbstractTransactionalJUnit4SpringCon
 
     private static Timestamp beforeBooking() {
         // Well before the test transaction's current_timestamp, so procs dispatched in this
-        // transaction land after the watermark and count as pending.
-        return new Timestamp(System.currentTimeMillis() - 600 * 1000L);
+        // transaction land after the watermark and count as pending -- even after
+        // ageBookingsPastSettleWindow() pushed them back 10 minutes.
+        return new Timestamp(System.currentTimeMillis() - 660 * 1000L);
     }
 
     private List<String> findFrameNames() {

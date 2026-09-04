@@ -150,6 +150,7 @@ class HostMonitor(QtWidgets.QWidget):
         self.__filterByHostName.setText("")
         self.hostMonitorTree.hostSearch.options['regex'] = []
         self.hostMonitorTree.licenseFilters = []
+        self.hostMonitorTree.updateRequest()
 
     # ==============================================================================
     # Menu to filter by allocation

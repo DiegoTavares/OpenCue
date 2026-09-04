@@ -427,6 +427,16 @@ public class AdminManagerService implements AdminManager {
             }
             Timestamp captureTime = new Timestamp(captureMs);
 
+            // The checks above read the watermark without a lock, so two concurrent reporters
+            // can both pass them. The conditional update is the authoritative admission: the
+            // loser blocks on the row, re-evaluates against the winner's watermark, and skips.
+            if (!limitDao.claimReportWatermark(limit, captureTime, source, minIntervalMs)) {
+                long winner = limitDao.getLimit(limit.getLimitId()).reportedTime;
+                skipped.add(skip(limit.name, captureMs < winner ? LimitReportSkipReason.OUT_OF_ORDER
+                        : LimitReportSkipReason.RATE_LIMITED));
+                continue;
+            }
+
             limitDao.replaceExternalHolds(limit, report.getHostsList(), source, captureTime);
             if (report.getTotalLicenses() > 0) {
                 limitDao.setMaxValue(limit, report.getTotalLicenses());

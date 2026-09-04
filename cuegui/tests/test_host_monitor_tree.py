@@ -90,10 +90,9 @@ class LicenseFilterTests(unittest.TestCase):
         self.tree.licenseFilters = ['houdini']
 
     @staticmethod
-    def _hold(host_name, limit_name):
+    def _hold(host_name, limit_name, source=opencue_proto.limit_pb2.CUE):
         return opencue_proto.limit_pb2.LimitHold(
-            host_name=host_name, limit_name=limit_name,
-            source=opencue_proto.limit_pb2.CUE)
+            host_name=host_name, limit_name=limit_name, source=source)
 
     @mock.patch('opencue.api.getHosts')
     @mock.patch('opencue.api.getLimitHolds')
@@ -105,6 +104,22 @@ class LicenseFilterTests(unittest.TestCase):
         result = self.tree._getUpdate()
 
         self.assertEqual(['host01'], [host.data.name for host in result])
+
+    @mock.patch('opencue.api.getHosts')
+    @mock.patch('opencue.api.getLimitHolds')
+    def test_holdsWithAnExternalComponentAreParenthesized(self, holds_mock, hosts_mock):
+        hosts_mock.return_value = [_makeHost(1, 2, name='host01')]
+        holds_mock.return_value = [
+            self._hold('host01', 'houdini'),
+            self._hold('host01', 'mari', source=opencue_proto.limit_pb2.EXTERNAL),
+            self._hold('host01', 'nuke', source=opencue_proto.limit_pb2.BOTH)]
+
+        self.tree._getUpdate()
+
+        # BOTH includes external usage, so it is marked like EXTERNAL; the Cue side of it is
+        # already visible through the host's running frames.
+        self.assertEqual(['(mari)', '(nuke)', 'houdini'],
+                         sorted(self.tree._HostMonitorTree__hostLimits.get('host01', [])))
 
     @mock.patch('opencue.api.getHosts')
     @mock.patch('opencue.api.getLimitHolds')
