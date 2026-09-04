@@ -148,7 +148,8 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
     public DispatcherDaoJdbc(Environment env) {
         this.schedulingMode = SchedulingMode.valueOf(
                 env.getProperty("dispatcher.scheduling_mode", String.class, "PRIORITY_ONLY"));
-        // Default mirrored in LimitDaoJdbc and WhiteboardDaoJdbc; keep the three in step.
+        // Default mirrored in FrameDaoJdbc, LimitDaoJdbc and WhiteboardDaoJdbc; keep the four
+        // in step.
         this.limitSettleWindowSeconds =
                 env.getProperty("limit.settle_window_seconds", Integer.class, 120);
         this.limitAffinityOrdering =

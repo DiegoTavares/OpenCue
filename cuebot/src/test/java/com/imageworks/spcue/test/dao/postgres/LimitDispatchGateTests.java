@@ -44,6 +44,7 @@ import com.imageworks.spcue.dao.HostDao;
 import com.imageworks.spcue.dao.LayerDao;
 import com.imageworks.spcue.dao.LimitDao;
 import com.imageworks.spcue.dispatcher.Dispatcher;
+import com.imageworks.spcue.dispatcher.FrameReservationException;
 import com.imageworks.spcue.grpc.host.HardwareState;
 import com.imageworks.spcue.grpc.limit.LimitBindSource;
 import com.imageworks.spcue.grpc.limit.LimitEnforcement;
@@ -60,6 +61,7 @@ import com.imageworks.spcue.util.CueUtil;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 /**
  * The limit dispatch gate and the settlement counting model, end to end against the real queries:
@@ -273,6 +275,49 @@ public class LimitDispatchGateTests extends AbstractTransactionalJUnit4SpringCon
         report(limit, new Timestamp(System.currentTimeMillis() - 3600 * 1000L), OTHER_HOST);
         assertTrue("A stale ENFORCED limit must stop blocking", boundLayerIsBookable());
         assertTrue(limitDao.getLimit(limit.getLimitId()).isReportStale());
+    }
+
+    @Test
+    @Transactional
+    @Rollback(true)
+    public void testHoldingHostKeepsBookingFramesAtHostLimitMax() {
+        // A HOST limit means all frames on a machine share one token: a host that lit the limit
+        // up must keep taking bound frames even at max. This is the frame-start re-check's
+        // regression guard -- the old frame-count re-check refused every start past max_value
+        // and clamped a holding host to max_value concurrent frames.
+        createBoundLimit(1, LimitType.HOST, LimitEnforcement.ENFORCED);
+
+        bookOneBoundFrame();
+        assertTrue("The one allowed machine is this host; more frames here are free",
+                boundLayerIsBookable());
+        bookOneBoundFrame();
+    }
+
+    @Test
+    @Transactional
+    @Rollback(true)
+    public void testFrameStartReCheckStopsBatchOvershoot() {
+        // The dispatch gate is evaluated once per find query, so a batch found under headroom
+        // could overshoot a FRAME limit as it books frame by frame. The frame-start re-check
+        // sees the procs booked earlier in the batch as pending and refuses the overshoot.
+        createBoundLimit(1, LimitType.FRAME, LimitEnforcement.ENFORCED);
+
+        DispatchHost host = getHost();
+        LayerDetail layer = layerDao.findLayerDetail(getJob(), "pass_1");
+        List<DispatchFrame> frames = dispatcherDao.findNextDispatchFrames(layer, host, 2);
+        assertEquals(2, frames.size());
+
+        VirtualProc first = VirtualProc.build(host, frames.get(0), getJob().os);
+        first.coresReserved = 100;
+        dispatcher.dispatch(frames.get(0), first);
+
+        VirtualProc second = VirtualProc.build(getHost(), frames.get(1), getJob().os);
+        second.coresReserved = 100;
+        try {
+            dispatcher.dispatch(frames.get(1), second);
+            fail("The second start of a batch must be refused once the first fills the limit");
+        } catch (FrameReservationException expected) {
+        }
     }
 
     @Test

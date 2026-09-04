@@ -130,9 +130,12 @@ public class DispatchQuery {
      * never-reported limits (the steady state for FRAME limits, which have no external reporter).
      * The CTE is only materialized if a bound layer actually probes it, so queries over unlimited
      * work pay nothing.
+     *
+     * Public because FrameDaoJdbc prefixes its UPDATE_FRAME_STARTED with it: the frame-start
+     * last-chance check reuses the same counting rule rather than mirroring it.
      */
     // spotless:off
-    private static final String LIMIT_USAGE_CTE =
+    public static final String LIMIT_USAGE_CTE =
             "WITH lim AS " + CTE_MATERIALIZED_TOKEN + " ("
                 + "SELECT "
                     + "limit_record.pk_limit_record, "
@@ -197,8 +200,12 @@ public class DispatchQuery {
      * a bound name the way AFFINITY_ORDER_SQL does. Local bookings are a small share of the farm,
      * so the extra binds were judged not worth it -- revisit if artists hit it on saturated HOST
      * limits.
+     *
+     * Public because FrameDaoJdbc embeds it in the frame-start last-chance check; callers outside
+     * this class must resolve {@link #SETTLE_WINDOW_TOKEN} and {@link #CTE_MATERIALIZED_TOKEN}
+     * themselves.
      */
-    private static String limitFilter(String layerAlias, String hostAlias) {
+    public static String limitFilter(String layerAlias, String hostAlias) {
         // spotless:off
         String threshold = hostAlias == null
                 ? "AND lim.usage_val >= lim.int_max_value "
