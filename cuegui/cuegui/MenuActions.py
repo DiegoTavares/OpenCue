@@ -426,6 +426,35 @@ class JobActions(AbstractActions):
                 job.resume()
             self._update()
 
+    shutdownIfCompleted_info = [
+        "Shutdown If &Completed",
+        "Finish jobs that have no frames left to run but are still in the cue",
+        "markdone"]
+
+    def shutdownIfCompleted(self, rpcObjects=None):
+        jobs = [job for job in self._getOnlyJobObjects(rpcObjects)
+                if cuegui.Utils.isJobCompleted(job)]
+        if not jobs:
+            return
+        msg = ("These jobs have no frames left to run but have not left the cue.\n\n"
+               "Cuebot will check each one again and finish only those that are "
+               "actually complete. No running frames are stopped.")
+        if cuegui.Utils.questionBoxYesNo(self._caller, "Shutdown completed jobs?", msg,
+                                         [job.data.name for job in jobs]):
+            blocked_job_owners = []
+            for job in jobs:
+                if not cuegui.Utils.isPermissible(job):
+                    blocked_job_owners.append(job.username())
+                    continue
+                self.cuebotCall(job.shutdownIfCompleted,
+                                "Failed to shutdown %s" % job.data.name)
+            if blocked_job_owners:
+                cuegui.Utils.showErrorMessageBox(
+                    AbstractActions.USER_INTERACTION_PERMISSIONS.format(
+                        "shutdown some of the selected jobs",
+                        ", ".join(blocked_job_owners)))
+            self._update()
+
     kill_info = ["&Kill", None, "kill"]
 
     def kill(self, rpcObjects=None):
