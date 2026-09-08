@@ -400,7 +400,7 @@ Mitigations, in order of effort:
 
 ## 6. Database schema
 
-Migration: `V48__Add_limit_types_and_host_holds.sql`.
+Migration: `V49__Add_limit_types_and_host_holds.sql`.
 
 ### `limit_record`
 
@@ -786,7 +786,7 @@ poll faster than cron's one-minute floor.
 
 The implementation lands in four independently shippable phases.
 
-**Phase 1 — schema and API.** V48, proto, DAO, `limit_usage` + maintenance task, servant, pycue.
+**Phase 1 — schema and API.** V49, proto, DAO, `limit_usage` + maintenance task, servant, pycue.
 `str_type` defaults to `FRAME`, `str_enforcement` to `ENFORCED`, `int_exit_status` to `NULL`,
 `limit_host` starts empty, and with no reports the pending scan reproduces today's counting. The
 `layer_limit` dedupe and unique constraint land here, ahead of anything that writes bindings. **No
