@@ -85,6 +85,10 @@ impl FrameCmdBuilder {
             .filter_map(|arg| arg.to_str())
             .collect();
         let cmd_str = args.join(" ");
+        // The exit-file wrapper hands the command to `eval` inside a single-quoted string, so
+        // every literal single quote has to be escaped (close, escaped quote, reopen) to keep
+        // the command text exactly as it was built.
+        let escaped_cmd_str = cmd_str.replace('\'', r"'\''");
         let mut file = File::create(&self.entrypoint_file_path).into_diagnostic()?;
 
         let add_user = match &self.become_user {
@@ -143,7 +147,7 @@ exit $exit_code
                 shell = self.shell,
                 exit_file_path = exit_file_path,
                 add_user = add_user,
-                cmd_str = cmd_str
+                cmd_str = escaped_cmd_str
             ),
             None => format!(
                 r#"#!{}
@@ -390,6 +394,34 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o111, 0o111, "entrypoint must be executable");
+    }
+
+    /// A frame command containing single quotes must reach `eval` unmangled: the quotes are
+    /// escaped for the wrapper's own quoting level instead of terminating it early, so the
+    /// command still runs with its original text and its status is reported correctly.
+    #[test]
+    fn test_script_handles_single_quotes_in_command() {
+        let built = build_script(r#"echo "it's a b"; echo 'quoted arg'; exit 5"#);
+
+        assert!(
+            built
+                .script
+                .contains(r#"eval 'echo "it'\''s a b"; echo '\''quoted arg'\''; exit 5' &"#),
+            "single quotes must be escaped, not dropped: {}",
+            built.script
+        );
+
+        let output = StdCommand::new(&built.entrypoint)
+            .output()
+            .expect("entrypoint should execute");
+        assert_eq!(output.status.code(), Some(5));
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "it's a b\nquoted arg"
+        );
+
+        let persisted = std::fs::read_to_string(&built.exit_file).unwrap();
+        assert_eq!(persisted.trim(), "5");
     }
 
     /// Executes the generated wrapper and checks that a plain exit code is both propagated
