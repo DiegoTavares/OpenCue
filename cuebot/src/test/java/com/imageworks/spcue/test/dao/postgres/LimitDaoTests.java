@@ -142,6 +142,22 @@ public class LimitDaoTests extends AbstractTransactionalJUnit4SpringContextTests
     @Test
     @Transactional
     @Rollback(true)
+    public void testFindMissingLimitNames() {
+        limitDao.createLimit(LIMIT_NAME, LIMIT_MAX_VALUE);
+
+        assertEquals(Collections.emptyList(),
+                limitDao.findMissingLimitNames(Collections.emptyList()));
+        assertEquals(Collections.emptyList(),
+                limitDao.findMissingLimitNames(Arrays.asList(LIMIT_NAME)));
+
+        List<String> missing =
+                limitDao.findMissingLimitNames(Arrays.asList("nope", LIMIT_NAME, "nada", "nope"));
+        assertEquals(Arrays.asList("nope", "nada"), missing);
+    }
+
+    @Test
+    @Transactional
+    @Rollback(true)
     public void testGetLimit() {
         String limitId = limitDao.createLimit(LIMIT_NAME, LIMIT_MAX_VALUE);
 

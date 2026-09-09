@@ -20,10 +20,14 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
@@ -218,6 +222,23 @@ public class LimitDaoJdbc extends JdbcDaoSupport implements LimitDao {
     public LimitEntity findLimit(String name) {
         return getJdbcTemplate().queryForObject(getLimitQueryBase + "WHERE limit_record.str_name=?",
                 LIMIT_MAPPER, name);
+    }
+
+    @Override
+    public List<String> findMissingLimitNames(Collection<String> names) {
+        Set<String> uniqueNames = new LinkedHashSet<String>(names);
+        if (uniqueNames.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        String placeholders =
+                uniqueNames.stream().map(name -> "?").collect(Collectors.joining(","));
+        Set<String> existing = new HashSet<String>(getJdbcTemplate().queryForList(
+                "SELECT str_name FROM limit_record WHERE str_name IN (" + placeholders + ")",
+                String.class, uniqueNames.toArray()));
+
+        return uniqueNames.stream().filter(name -> !existing.contains(name))
+                .collect(Collectors.toList());
     }
 
     @Override

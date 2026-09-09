@@ -134,6 +134,14 @@ public interface AdminManager {
 
     LimitInterface findLimit(String name);
 
+    /**
+     * Returns the subset of the given limit names that have not been created yet.
+     *
+     * @param names
+     * @return names that do not exist
+     */
+    List<String> findMissingLimitNames(Collection<String> names);
+
     LimitInterface getLimit(String id);
 
     void setLimitName(LimitInterface limit, String name);
