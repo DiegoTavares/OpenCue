@@ -691,7 +691,7 @@ impl RunningFrame {
     /// 1. Creates a logger for the frame
     /// 2. Runs the frame command on a new process
     /// 3. Updates the frame's exit code based on the result
-    /// 4. Cleans up any snapshots created during execution
+    /// 4. Cleans up the recovery files (snapshot and exit file) now that the status is known
     ///
     /// If the process fails to spawn, it logs the error but doesn't set an exit code.
     /// The method handles both successful and failed execution scenarios.
@@ -748,6 +748,9 @@ impl RunningFrame {
                 false
             }
         };
+        // Clear the snapshot before the exit file. While a snapshot exists, a restarted RQD
+        // recovers this frame and looks for its status in the exit file; removing the exit
+        // file first would leave a window where a crash makes a finished frame look killed.
         if let Err(err) = self.clear_snapshot().await {
             // Only warn if a job was actually launched
             if was_spawned {
@@ -755,6 +758,20 @@ impl RunningFrame {
                     "Failed to clear snapshot {}: {}",
                     self.snapshot_path().unwrap_or("empty_path".to_string()),
                     err
+                );
+            }
+        };
+        // The exit file exists so a restarted RQD can learn the outcome of a frame it no
+        // longer parents. Its status has now been consumed and reported, so drop it instead
+        // of leaving one file per frame behind in temp_path. A frame interrupted before this
+        // point keeps its exit file for recovery to read.
+        if let Err(err) = tokio::fs::remove_file(&self.exit_file_path).await {
+            // Absent is routine: frames launched with recovery disabled, on Windows, or
+            // killed before the wrapper could write a status never create one.
+            if was_spawned && err.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    "Failed to remove exit file {}: {}",
+                    self.exit_file_path, err
                 );
             }
         };
@@ -2827,6 +2844,32 @@ mod tests {
                 .expect("recovery should succeed");
             assert_eq!((1, Some(15)), status);
 
+            cleanup(&frame).await;
+        }
+
+        /// `run` owns the exit file's lifetime: once it has consumed and reported the frame's
+        /// status the file must be gone, otherwise every frame ever launched leaves one behind
+        /// in `temp_path`. The other half of the contract — the file surviving until the status
+        /// is consumed — is covered by `test_recover_frame_finished_while_rqd_down`, which
+        /// reads the status back after `run_inner` returns.
+        #[tokio::test]
+        async fn test_run_removes_exit_file_after_completion() {
+            let frame = create_running_frame("exit 7", 1, 1, HashMap::new());
+
+            frame.run(false).await;
+
+            match &*frame.state.read().unwrap() {
+                super::super::FrameState::Finished(finished) => {
+                    assert_eq!(finished.exit_code, 7, "frame status must still be reported")
+                }
+                other => panic!("frame should have finished: {other:?}"),
+            }
+            assert!(
+                !std::path::Path::new(&frame.exit_file_path).exists(),
+                "exit file must not outlive the frame whose status it carried"
+            );
+
+            let _ = std::fs::remove_file(&frame.log_path);
             cleanup(&frame).await;
         }
 
