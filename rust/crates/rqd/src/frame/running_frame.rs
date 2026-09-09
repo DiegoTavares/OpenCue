@@ -777,10 +777,14 @@ impl RunningFrame {
         let raw_stdout = Self::setup_raw_fd(&self.raw_stdout_path).await?;
         let raw_stderr = Self::setup_raw_fd(&self.raw_stderr_path).await?;
 
-        let (cmd, cmd_str) = command
-            .with_frame_cmd(self.request.command.clone())
-            .with_exit_file(self.exit_file_path.clone())
-            .build()?;
+        command.with_frame_cmd(self.request.command.clone());
+        // The exit file is what lets a restarted RQD recover this frame's real exit status;
+        // asking for it is also what wraps the command in the trap script. Gated by config so
+        // recovery can be switched off on a host without restarting RQD.
+        if self.config.is_frame_recovery_enabled() {
+            command.with_exit_file(self.exit_file_path.clone());
+        }
+        let (cmd, cmd_str) = command.build()?;
 
         unsafe {
             cmd.envs(&self.env_vars)
@@ -902,10 +906,11 @@ impl RunningFrame {
         let raw_stdout = Self::setup_raw_file(&self.raw_stdout_path).await?;
         let raw_stderr = Self::setup_raw_file(&self.raw_stderr_path).await?;
 
-        let (cmd, cmd_str) = command
-            .with_frame_cmd(self.request.command.clone())
-            .with_exit_file(self.exit_file_path.clone())
-            .build()?;
+        command.with_frame_cmd(self.request.command.clone());
+        if self.config.is_frame_recovery_enabled() {
+            command.with_exit_file(self.exit_file_path.clone());
+        }
+        let (cmd, cmd_str) = command.build()?;
 
         cmd.envs(&self.env_vars)
             .current_dir(&self.config.temp_path)
@@ -2821,6 +2826,40 @@ mod tests {
                 .expect("recovery should not hang")
                 .expect("recovery should succeed");
             assert_eq!((1, Some(15)), status);
+
+            cleanup(&frame).await;
+        }
+
+        /// With `frame_recovery_enabled: false` the frame must run its command directly: no
+        /// wrapper, no exit file. This is the kill switch operators flip when the recovery
+        /// harness misbehaves in production, so it has to leave the frame's own exit status
+        /// untouched.
+        #[tokio::test]
+        async fn test_recovery_disabled_skips_exit_file() {
+            let frame = super::create_running_frame_cfg(
+                "exit 7",
+                1,
+                1,
+                HashMap::new(),
+                "",
+                |config: &mut crate::config::RunnerConfig| config.frame_recovery_enabled = false,
+            );
+
+            let logger =
+                Arc::new(TestLogger::init()) as Arc<dyn FrameLoggerT + Send + Sync + 'static>;
+            let status = frame.run_inner(logger).await.expect("frame should run");
+            assert_eq!((7, None), status);
+
+            assert!(
+                !std::path::Path::new(&frame.exit_file_path).exists(),
+                "no exit file should be written when recovery is disabled"
+            );
+            let script = std::fs::read_to_string(&frame.entrypoint_file_path)
+                .expect("entrypoint should exist");
+            assert!(
+                !script.contains(&frame.exit_file_path) && !script.contains("trap "),
+                "frame must run unwrapped when recovery is disabled: {script}"
+            );
 
             cleanup(&frame).await;
         }
