@@ -153,7 +153,7 @@ public class DispatcherDaoJdbc extends JdbcDaoSupport implements DispatcherDao {
         this.limitSettleWindowSeconds =
                 env.getProperty("limit.settle_window_seconds", Integer.class, 120);
         this.limitAffinityOrdering =
-                env.getProperty("dispatcher.limit.affinity_ordering_enabled", Boolean.class, true);
+                env.getProperty("dispatcher.limit.affinity_ordering_enabled", Boolean.class, false);
     }
 
     /**

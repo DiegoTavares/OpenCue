@@ -200,8 +200,10 @@ Layers with no license limits and layers whose licenses this host already holds 
 indistinguishable at position 0, so unlicensed work is never penalized. Two guards:
 
 - The bias applies **within a job only**. Job and priority selection are untouched.
-- It is gated behind `dispatcher.limit.affinity_ordering_enabled` (default `true`), because it sits
-  ahead of `int_dispatch_order` and does reorder frames a user may be watching.
+- It is gated behind `dispatcher.limit.affinity_ordering_enabled` (default `false`): the sort key is
+  evaluated per candidate frame, so every job pays a small dispatch cost whether or not it uses
+  license limits, and it sits ahead of `int_dispatch_order`, reordering frames a user may be
+  watching. Sites using HOST limits should turn it on to get the packing behavior described here.
 
 The ordering bias applies to **ADVISORY limits too** — it never blocks anything, it only chooses
 among work already eligible. That composition is the point of advisory mode: a site can run every
@@ -501,8 +503,9 @@ limit.usage_refresh_seconds=5
 limit.min_report_interval_seconds=5
 
 # Whether dispatch orders layers a host can run without acquiring a new license ahead of layers
-# that would light up a new one. Default = true.
-dispatcher.limit.affinity_ordering_enabled=true
+# that would light up a new one. Off by default so jobs without license limits pay no sort cost;
+# turn on when using HOST limits. Default = false.
+dispatcher.limit.affinity_ordering_enabled=false
 
 # DEPRECATED. Superseded by the failure rule on the limit itself. Statuses claimed by a limit take
 # precedence; any left here and unclaimed still work, with a one-time WARN at startup.
