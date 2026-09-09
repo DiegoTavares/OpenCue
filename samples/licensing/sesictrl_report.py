@@ -113,9 +113,10 @@ def normalize_host(name):
     """Reduces a reported hostname to the key Cuebot matches hosts on.
 
     Cuebot stores short, lowercase hostnames. License servers report anything
-    from a bare name to a fully qualified domain name. Cuebot normalizes on its
-    side as well, so this is belt and braces, but normalizing here keeps the
-    ``--dry-run`` output honest about what will actually be sent.
+    from a bare name to a fully qualified domain name, and sesinetd prefixes the
+    account holding the license. Cuebot normalizes on its side as well, so this
+    is belt and braces, but normalizing here keeps the ``--dry-run`` output
+    honest about what will actually be sent.
 
     :type  name: str
     :param name: hostname as reported by the license server
@@ -124,7 +125,39 @@ def normalize_host(name):
     """
     if not name:
         return ''
-    return name.strip().split('.')[0].lower()
+    # Drop any "user@" prefix before the domain: Cuebot matches on the machine
+    # alone, so a composite identity matches no host at all.
+    return name.strip().rpartition('@')[2].split('.')[0].lower()
+
+
+def split_identity(host_field, user_field=''):
+    """Resolves the user and host a checkout belongs to.
+
+    ``sesinetd`` names a checkout after the account holding it, as
+    ``user@host``. Depending on the sesictrl version that composite arrives in
+    the host field, in the user field, or split across both, so both fields are
+    considered here and each half is taken from wherever it appears.
+
+    Keeping the halves apart matters: Cuebot matches holders on the host alone,
+    so a composite name matches no Cuebot host, and two artists on one machine
+    would count as two machines against a HOST limit.
+
+    :type  host_field: str
+    :param host_field: value of the record's host-ish key, possibly ``user@host``
+    :type  user_field: str
+    :param user_field: value of the record's user-ish key, possibly ``user@host``
+    :rtype:  tuple[str, str]
+    :return: user (empty if none was reported) and normalized short hostname
+    """
+    host_user, _, host = (host_field or '').strip().rpartition('@')
+
+    named_user, separator, user_host = (user_field or '').strip().rpartition('@')
+    if not separator:
+        # Without an '@', rpartition leaves the whole string on the right; for a
+        # user field that string is the account, not a machine.
+        named_user, user_host = user_host, ''
+
+    return named_user or host_user, normalize_host(host or user_host)
 
 
 def run_sesictrl(binary, timeout, extra_args=None):
@@ -173,7 +206,9 @@ def parse_sesictrl_json(raw):
     shape sesictrl emits for ``print-license --format json --show-all``: a list
     of license records, each naming a product and carrying a list of the machines
     currently using it. Both the top-level container and the per-record key names
-    vary between Houdini versions, so several spellings are accepted.
+    vary between Houdini versions, so several spellings are accepted, as does
+    where a machine's ``user@host`` identity lands; ``split_identity`` untangles
+    that.
 
     Replace the body wholesale if your sesictrl emits something else. The
     contract is all that matters: raw output in, ``Checkout`` tuples out.
@@ -218,14 +253,15 @@ def parse_sesictrl_json(raw):
         totals[product] += _first_int(record, ('count', 'total', 'quantity', 'seats'))
 
         for usage in _usage_entries(record):
-            host = normalize_host(
-                _first_string(usage, ('host', 'hostname', 'machine', 'server')))
+            user, host = split_identity(
+                _first_string(usage, ('host', 'hostname', 'machine', 'server')),
+                _first_string(usage, ('user', 'username', 'owner')))
             if not host:
                 continue
             checkouts.append(Checkout(
                 product=product,
                 host=host,
-                user=_first_string(usage, ('user', 'username', 'owner')),
+                user=user,
                 tokens=max(1, _first_int(usage, ('count', 'tokens', 'used')) or 1)))
 
     if records and not totals:
@@ -242,13 +278,19 @@ def parse_sesictrl_json(raw):
 
 
 def _usage_entries(record):
-    """Yields the per-machine usage dicts from one license record."""
+    """Yields the per-machine usage entries from one license record.
+
+    Entries are dicts in most versions, but some list bare ``user@host``
+    identities instead; those are wrapped so callers see one shape.
+    """
     for key in ('users', 'usage', 'in_use', 'checkouts', 'clients'):
         entries = record.get(key)
         if isinstance(entries, list):
             for entry in entries:
                 if isinstance(entry, dict):
                     yield entry
+                elif isinstance(entry, str) and entry.strip():
+                    yield {'user': entry}
             return
         # Some versions report a single host per record rather than a list.
         if isinstance(entries, dict):
