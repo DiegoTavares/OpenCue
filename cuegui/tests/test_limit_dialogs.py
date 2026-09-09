@@ -66,6 +66,24 @@ class CreateLimitDialogTests(unittest.TestCase):
         self.assertTrue(self.dialog._CreateLimitDialog__modeAdvisory.isChecked())
         self.assertFalse(self.dialog._CreateLimitDialog__modeEnforced.isChecked())
 
+    def testSoftThresholdFollowsType(self):
+        # Packing counts machines, so the threshold is meaningless for per-frame limits;
+        # the field must say why it is disabled instead of showing "same as maximum".
+        # pylint: disable=protected-access
+        softValue = self.dialog._CreateLimitDialog__softValue
+
+        self.assertFalse(softValue.isEnabled())
+        self.assertEqual('per-host limits only', softValue.specialValueText())
+
+        self.dialog._CreateLimitDialog__typeHost.setChecked(True)
+        self.assertTrue(softValue.isEnabled())
+        self.assertEqual('same as maximum', softValue.specialValueText())
+
+        softValue.setValue(120)
+        self.dialog._CreateLimitDialog__typeFrame.setChecked(True)
+        self.assertFalse(softValue.isEnabled())
+        self.assertEqual(0, softValue.value())
+
     @mock.patch('opencue.api.createLimit')
     @mock.patch('opencue.api.findLimit',
                 new=mock.Mock(side_effect=opencue.exception.CueException('no such limit')))

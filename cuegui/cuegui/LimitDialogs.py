@@ -93,12 +93,9 @@ class CreateLimitDialog(QtWidgets.QDialog):
 
         self.__softValue = QtWidgets.QSpinBox(self)
         self.__softValue.setRange(0, 999999999)
-        self.__softValue.setSpecialValueText("same as maximum")
         self.__softValue.setEnabled(False)
-        self.__softValue.setToolTip(
-            "Above this many machines, only machines already holding a license\n"
-            "may take the work: the farm packs instead of spreading.")
         form.addRow("Only pack onto machines\nalready licensed above:", self.__softValue)
+        self.__softLabel = form.labelForField(self.__softValue)
 
         self.__modeEnforced = QtWidgets.QRadioButton("Enforced", self)
         self.__modeEnforced.setChecked(True)
@@ -169,12 +166,31 @@ class CreateLimitDialog(QtWidgets.QDialog):
         # pylint: disable=no-member
         buttons.accepted.connect(self.__accept)
         buttons.rejected.connect(self.reject)
-        self.__typeHost.toggled.connect(self.__softValue.setEnabled)
+        self.__typeHost.toggled.connect(self.__typeChanged)
         self.__noReporter.toggled.connect(self.__reportTtl.setDisabled)
         self.__exitStatus.valueChanged.connect(self.__exitStatusChanged)
         self.__modeEnforced.clicked.connect(self.__modeTouched)
         self.__modeAdvisory.clicked.connect(self.__modeTouched)
         # pylint: enable=no-member
+
+        self.__typeChanged(self.__typeHost.isChecked())
+
+    def __typeChanged(self, isHost):
+        """Packing counts machines, so the soft threshold only applies to per-host limits."""
+        self.__softValue.setEnabled(isHost)
+        if self.__softLabel:
+            self.__softLabel.setEnabled(isHost)
+        if isHost:
+            self.__softValue.setSpecialValueText("same as maximum")
+            self.__softValue.setToolTip(
+                "Above this many machines, only machines already holding a license\n"
+                "may take the work: the farm packs instead of spreading.")
+        else:
+            self.__softValue.setSpecialValueText("per-host limits only")
+            self.__softValue.setValue(0)
+            self.__softValue.setToolTip(
+                "Packing is a per-machine idea: it only means something once frames on\n"
+                "the same machine share a license. Pick \"Per host\" to set a threshold.")
 
     def __modeTouched(self):
         self.__userTouchedMode = True
