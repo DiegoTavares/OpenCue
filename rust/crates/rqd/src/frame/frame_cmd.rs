@@ -173,7 +173,15 @@ exit $exit_code
         )
         .map_err(|e| miette!("Failed to set entrypoint file permissions: {}", e))?;
 
-        self.cmd = Command::new(&self.entrypoint_file_path);
+        // Run the script as an argument to the shell instead of exec'ing the file directly.
+        // RQD launches frames from many threads: a concurrent launch's forked child inherits
+        // this file's write fd for the window between its fork and exec, and execve on a file
+        // anyone holds open for writing fails with ETXTBSY ("Text file busy"). Passing the
+        // script as an argument opens it read-only, which is immune to that race, and matches
+        // what the kernel's shebang handling would have spawned anyway.
+        let mut cmd = Command::new(&self.shell);
+        cmd.arg(&self.entrypoint_file_path);
+        self.cmd = cmd;
         Ok((&mut self.cmd, script.clone()))
     }
 
@@ -340,6 +348,43 @@ mod tests {
         }
     }
 
+    /// Runs the generated wrapper the same way production does: as an argument to the shell,
+    /// never by exec'ing the entrypoint file directly. Exec'ing the file races with concurrent
+    /// `File::create` calls in other tests/frames (fork inherits the write fd → ETXTBSY);
+    /// see the comment in `build()`.
+    fn wrapper_command(built: &BuiltScript) -> StdCommand {
+        let mut cmd = StdCommand::new("/bin/bash");
+        cmd.arg(&built.entrypoint);
+        cmd
+    }
+
+    /// The built command must spawn `<shell> <entrypoint>` rather than exec the entrypoint
+    /// file itself. Exec'ing a just-written file races with concurrent frame launches
+    /// (a forked sibling still holds the write fd at exec time → ETXTBSY).
+    #[test]
+    fn test_build_spawns_shell_with_entrypoint_arg() {
+        let temp = tempfile::tempdir().unwrap();
+        let entrypoint = temp
+            .path()
+            .join("entrypoint.sh")
+            .to_string_lossy()
+            .to_string();
+        let shell = "/bin/bash".to_string();
+        let mut builder = FrameCmdBuilder::new(&shell, entrypoint.clone());
+        builder
+            .with_frame_cmd("echo hello".to_string())
+            .with_exit_file(temp.path().join("exit").to_string_lossy().to_string());
+        let (cmd, _script) = builder.build().unwrap();
+
+        let std_cmd = cmd.as_std();
+        assert_eq!(std_cmd.get_program().to_string_lossy(), shell);
+        let args: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(args, vec![entrypoint]);
+    }
+
     /// The exit-file harness must be active on every unix platform. This is the regression
     /// guard for the era when `with_exit_file` was a no-op on Linux, which silently disabled
     /// frame recovery there.
@@ -411,7 +456,7 @@ mod tests {
             built.script
         );
 
-        let output = StdCommand::new(&built.entrypoint)
+        let output = wrapper_command(&built)
             .output()
             .expect("entrypoint should execute");
         assert_eq!(output.status.code(), Some(5));
@@ -430,7 +475,7 @@ mod tests {
     fn test_script_propagates_and_persists_exit_code() {
         let built = build_script("exit 7");
 
-        let status = StdCommand::new(&built.entrypoint)
+        let status = wrapper_command(&built)
             .status()
             .expect("entrypoint should execute");
         assert_eq!(status.code(), Some(7));
@@ -446,7 +491,7 @@ mod tests {
     fn test_script_forwards_sigterm_and_persists_status() {
         let built = build_script("sleep 30");
 
-        let mut child = StdCommand::new(&built.entrypoint)
+        let mut child = wrapper_command(&built)
             .spawn()
             .expect("entrypoint should spawn");
 
