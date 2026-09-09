@@ -1805,15 +1805,14 @@ class LimitActionsTests(unittest.TestCase):
         self.limit_actions = cuegui.MenuActions.LimitActions(
             self.widgetMock, mock.Mock(), None, None)
 
-    @mock.patch('opencue.api.createLimit')
-    @mock.patch('qtpy.QtWidgets.QInputDialog.getText')
-    def test_create(self, getTextMock, createLimitMock):
-        limitName = 'newLimitName'
-        getTextMock.return_value = ('%s \t ' % limitName, True)
+    @mock.patch('cuegui.LimitDialogs.CreateLimitDialog')
+    def test_create(self, createDialogMock):
+        createDialogMock.return_value.exec_.return_value = True
 
         self.limit_actions.create()
 
-        createLimitMock.assert_called_with(limitName, 0)
+        createDialogMock.assert_called_with(self.widgetMock)
+        createDialogMock.return_value.exec_.assert_called()
 
     @mock.patch('cuegui.Utils.questionBoxYesNo', new=mock.Mock(return_value=True))
     def test_delete(self):
