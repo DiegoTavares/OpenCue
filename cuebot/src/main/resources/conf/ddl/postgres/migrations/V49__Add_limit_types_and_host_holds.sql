@@ -12,6 +12,15 @@
 -- limit names. Precheck with:
 --   SELECT str_name, COUNT(*) FROM limit_record GROUP BY str_name HAVING COUNT(*) > 1;
 -- and resolve duplicates (rename or delete, repointing layer_limit) first.
+--
+-- BACKWARDS COMPATIBILITY: this migration is additive -- no column or table is
+-- removed -- so an older Cuebot can keep running against a migrated database,
+-- and a rollback to one is safe. Every new column is NOT NULL with a default,
+-- so the older INSERT statements (which do not name them) still work.
+-- The two new uniqueness constraints are the only visible change to an older
+-- Cuebot: creating a second limit with an existing name, or binding the same
+-- limit to a layer twice, now raises a duplicate key error instead of silently
+-- creating a row that corrupts the usage counts.
 
 -- ---------------------------------------------------------------------------
 -- limit_record: counting type, enforcement, thresholds, report metadata and
@@ -30,10 +39,13 @@ ALTER TABLE limit_record ADD COLUMN int_delay_minutes INT     DEFAULT 0    NOT N
 ALTER TABLE limit_record ADD COLUMN b_auto_tag        BOOLEAN DEFAULT true NOT NULL;
 
 -- Carry over the dead flag from V2 rather than dropping the intent on the floor.
+-- The column itself stays so the schema remains readable by older Cuebot builds;
+-- str_type is authoritative from here on and nothing maintains b_host_limit.
 UPDATE limit_record SET str_type = 'HOST' WHERE b_host_limit = true;
-ALTER TABLE limit_record DROP COLUMN b_host_limit;
+COMMENT ON COLUMN limit_record.b_host_limit IS 'Deprecated: superseded by str_type. Never read by any Cuebot version; kept only so pre-V49 builds see an unchanged schema. Not kept in sync.';
 
 ALTER TABLE limit_record ADD CONSTRAINT c_limit_record_pk PRIMARY KEY (pk_limit_record);
+-- V12 indexed pk_limit_record by hand; the primary key above supersedes it.
 DROP INDEX IF EXISTS i_limit_record_pk_limit_record;
 ALTER TABLE limit_record ADD CONSTRAINT c_limit_record_uk_name UNIQUE (str_name);
 ALTER TABLE limit_record ADD CONSTRAINT c_limit_record_ck_type

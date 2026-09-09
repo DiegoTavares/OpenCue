@@ -417,7 +417,9 @@ b_auto_tag        BOOLEAN DEFAULT true NOT NULL
 ```
 
 The dead `b_host_limit` flag from `V2__Add_limit_table.sql` — never read by any code in any language
-— is migrated to `str_type = 'HOST'` and dropped.
+— is migrated to `str_type = 'HOST'`. The column itself is kept, not dropped: the migration is
+purely additive so an older Cuebot can still run against a migrated database. `str_type` is
+authoritative from here on, and nothing keeps `b_host_limit` in sync.
 
 The migration also adds the primary key and the name uniqueness constraint that `limit_record` never
 had, plus a partial unique index on `int_exit_status`.
@@ -813,7 +815,8 @@ Then, per limit: create it `ADVISORY` with `auto_tag` on, watch coverage plateau
 | `Limit.max_value`, `id`, `name` | unchanged |
 | `createLimit(name, maxValue)` | unchanged signature; ENFORCED FRAME limit |
 | Existing limits | FRAME + ENFORCED; identical behavior |
-| `b_host_limit = true` rows | migrated to `str_type = 'HOST'` |
+| `b_host_limit = true` rows | migrated to `str_type = 'HOST'`; column retained, unused |
+| Older Cuebot ↔ migrated database | works; the migration adds only columns, tables and constraints |
 | CueGUI ↔ older Cuebot | new columns render `0` / `--`; no crash |
 | Older CueGUI ↔ new Cuebot | unaware of new fields; works unchanged |
 | `rest_gateway` | no change; new RPCs exposed automatically |
