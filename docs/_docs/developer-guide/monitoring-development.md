@@ -1,6 +1,6 @@
 ---
 title: "Monitoring system development"
-nav_order: 100
+nav_order: 120
 parent: Developer Guide
 layout: default
 linkTitle: "Monitoring development"

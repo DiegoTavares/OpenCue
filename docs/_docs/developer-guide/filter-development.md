@@ -1,6 +1,6 @@
 ---
 title: "Filter Development"
-nav_order: 96
+nav_order: 80
 parent: Developer Guide
 layout: default
 date: 2025-10-15
