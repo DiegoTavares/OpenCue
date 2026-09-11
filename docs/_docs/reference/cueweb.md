@@ -1374,6 +1374,7 @@ OpenCueWeb communicates with these REST Gateway endpoints:
 | `host.HostInterface/GetComments` | List a host's comments (detail page Comments tab) |
 | `host.HostInterface/Lock` / `Unlock` | Lock / unlock a host |
 | `host.HostInterface/Reboot` / `RebootWhenIdle` | Reboot a host immediately / when idle |
+| `host.HostInterface/RestartRqdNow` / `RestartRqdWhenIdle` | Restart the RQD service immediately / when idle (no machine reboot) |
 | `host.HostInterface/AddTags` / `RemoveTags` | Add / remove host tags |
 
 ### OpenCueWeb Proxy Routes

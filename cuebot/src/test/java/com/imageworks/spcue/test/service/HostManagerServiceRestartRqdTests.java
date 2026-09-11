@@ -16,6 +16,7 @@ package com.imageworks.spcue.test.service;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.InOrder;
 
 import com.imageworks.spcue.HostEntity;
 import com.imageworks.spcue.HostInterface;
@@ -28,6 +29,7 @@ import com.imageworks.spcue.service.HostManagerService;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -37,7 +39,8 @@ import static org.mockito.Mockito.when;
  * Unit tests for the RQD service restart contract of {@link HostManagerService}: restarts are
  * refused unless the host is UP (protecting pending reboots and repair holds from being clobbered
  * by the restart's boot report), RQD-side failures propagate instead of reporting silent success,
- * and the drain state is written only after RQD accepted the request.
+ * and the drain state is written before the RPC (so nothing is booked into the restart window) with
+ * UP restored when the request fails.
  */
 public class HostManagerServiceRestartRqdTests {
 
@@ -61,23 +64,29 @@ public class HostManagerServiceRestartRqdTests {
     }
 
     @Test
-    public void restartRqdNowSetsRebootingStateAfterRqdAccepts() {
+    public void restartRqdNowSetsRebootingStateBeforeCallingRqd() {
         when(hostDao.isHostUp(host)).thenReturn(true);
 
         hostManager.restartRqdNow(host);
 
-        verify(rqdClient).restartRqdNow(host);
-        verify(hostDao).updateHostState(host, HardwareState.REBOOTING);
+        // State must be written before the RPC so the dispatcher cannot book a frame into
+        // the restart window while the request is in flight.
+        InOrder inOrder = inOrder(hostDao, rqdClient);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.REBOOTING);
+        inOrder.verify(rqdClient).restartRqdNow(host);
+        verify(hostDao, never()).updateHostState(host, HardwareState.UP);
     }
 
     @Test
-    public void restartRqdWhenIdleSetsRebootWhenIdleStateAfterRqdAccepts() {
+    public void restartRqdWhenIdleSetsRebootWhenIdleStateBeforeCallingRqd() {
         when(hostDao.isHostUp(host)).thenReturn(true);
 
         hostManager.restartRqdWhenIdle(host);
 
-        verify(rqdClient).restartRqdWhenIdle(host);
-        verify(hostDao).updateHostState(host, HardwareState.REBOOT_WHEN_IDLE);
+        InOrder inOrder = inOrder(hostDao, rqdClient);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.REBOOT_WHEN_IDLE);
+        inOrder.verify(rqdClient).restartRqdWhenIdle(host);
+        verify(hostDao, never()).updateHostState(host, HardwareState.UP);
     }
 
     @Test
@@ -111,7 +120,7 @@ public class HostManagerServiceRestartRqdTests {
     }
 
     @Test
-    public void restartRqdNowPropagatesRqdFailureWithoutTouchingHostState() {
+    public void restartRqdNowPropagatesRqdFailureAndRestoresUpState() {
         when(hostDao.isHostUp(host)).thenReturn(true);
         doThrow(new RqdClientException("rqd unreachable")).when(rqdClient).restartRqdNow(host);
 
@@ -122,11 +131,15 @@ public class HostManagerServiceRestartRqdTests {
             // Expected: RQD-side failures must reach the caller.
         }
 
-        verify(hostDao, never()).updateHostState(any(), any());
+        // The pre-RPC REBOOTING write must be rolled back so a failed request leaves no
+        // residue that would keep the host out of the booking pool.
+        InOrder inOrder = inOrder(hostDao);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.REBOOTING);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.UP);
     }
 
     @Test
-    public void restartRqdWhenIdlePropagatesRqdFailureWithoutTouchingHostState() {
+    public void restartRqdWhenIdlePropagatesRqdFailureAndRestoresUpState() {
         when(hostDao.isHostUp(host)).thenReturn(true);
         doThrow(new RqdClientException("not supported")).when(rqdClient).restartRqdWhenIdle(host);
 
@@ -137,6 +150,8 @@ public class HostManagerServiceRestartRqdTests {
             // Expected: RQD-side failures must reach the caller.
         }
 
-        verify(hostDao, never()).updateHostState(any(), any());
+        InOrder inOrder = inOrder(hostDao);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.REBOOT_WHEN_IDLE);
+        inOrder.verify(hostDao).updateHostState(host, HardwareState.UP);
     }
 }

@@ -508,13 +508,19 @@ impl MachineMonitor {
 
     /// Triggers a pending reboot or rqd service restart once the machine becomes idle.
     /// A failed reboot stays armed and is retried on the next tick.
+    ///
+    /// The idleness check and the action consumption happen under the `idle_action` mutex so
+    /// a concurrent [`Machine::cancel_idle_action`] (UnlockAll) cannot report a cancellation
+    /// for an action that is nevertheless executed.
     async fn check_idle_action(&self) {
         if self.restarting.load(Ordering::SeqCst) {
             return;
         }
-        let armed = *self.idle_action.lock().await;
-        match resolve_idle_action(self.is_idle(), armed) {
+        let mut armed = self.idle_action.lock().await;
+        match resolve_idle_action(self.is_idle(), *armed) {
             Some(IdleAction::Reboot) => {
+                // Deliberately not consumed: a failed reboot stays armed for the next tick,
+                // and a successful one takes the machine down anyway.
                 warn!("Machine became idle. Rebooting..");
                 if let Err(err) = self.system_manager.lock().await.reboot() {
                     error!("Failed to reboot when became idle. {err}");
@@ -522,7 +528,8 @@ impl MachineMonitor {
             }
             Some(IdleAction::RestartRqd) => {
                 warn!("Machine became idle. Restarting rqd service..");
-                self.idle_action.lock().await.take();
+                armed.take();
+                drop(armed);
                 self.trigger_restart().await;
             }
             None => {}
@@ -574,6 +581,24 @@ impl MachineMonitor {
                      (runner.run_on_docker) is not supported yet"
                 ));
             }
+            // The global flag being on now doesn't mean every frame launched with it on, and
+            // an ignored snapshot-write failure would leave a frame unrecoverable. Check what
+            // each frame actually has instead of what the config currently says.
+            let not_ready: Vec<String> = self
+                .running_frames_cache
+                .iter()
+                .filter(|entry| !entry.value().is_recovery_armed())
+                .map(|entry| entry.value().to_string())
+                .collect();
+            if !not_ready.is_empty() {
+                return Err(miette!(
+                    "Refusing to restart: {} running frame(s) are not recovery-ready (still \
+                     starting, launched while recovery was disabled, or their snapshot write \
+                     failed): {}",
+                    not_ready.len(),
+                    not_ready.join(", ")
+                ));
+            }
         }
         Ok(())
     }
@@ -591,10 +616,37 @@ impl MachineMonitor {
         let pending_completions = Arc::clone(&self.pending_completions);
         let report_client = Arc::clone(&self.report_client);
         let last_host_state = Arc::clone(&self.last_host_state);
+        let running_frames_cache = Arc::clone(&self.running_frames_cache);
         let send_timeout = self.maching_config.frame_complete_send_timeout;
         tokio::spawn(async move {
             // Give the grpc response that requested the restart a moment to flush.
             time::sleep(Duration::from_millis(500)).await;
+
+            // A launch admitted concurrently with the restart decision (it passed the
+            // idle-action check before `restarting` was set) may still be between spawn and
+            // snapshot. Give such frames a bounded window to finish arming so the exit does
+            // not orphan an unrecoverable render.
+            let arm_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let pending_arm = running_frames_cache.iter().any(|entry| {
+                    !entry.value().is_recovery_armed()
+                        && matches!(
+                            entry.value().get_state_copy(),
+                            FrameState::Created(_) | FrameState::Running(_)
+                        )
+                });
+                if !pending_arm {
+                    break;
+                }
+                if Instant::now() >= arm_deadline {
+                    error!(
+                        "Restarting with frame(s) that are not recovery-ready; they may be \
+                         orphaned and later rebooked by Cuebot"
+                    );
+                    break;
+                }
+                time::sleep(Duration::from_millis(200)).await;
+            }
             if !pending_completions.is_empty() {
                 let drain = Self::deliver_pending_completions(
                     Arc::clone(&pending_completions),

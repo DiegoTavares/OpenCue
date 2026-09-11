@@ -114,26 +114,37 @@ public class HostManagerService implements HostManager {
     }
 
     // SUPPORTS: don't pin a pooled DB connection for the duration of the blocking RQD call.
-    // The two DAO reads/writes around it are single autocommitted statements.
+    // The DAO reads/writes around it are single autocommitted statements.
     @Transactional(propagation = Propagation.SUPPORTS)
     public void restartRqdNow(HostInterface host) {
-        verifyRestartRqdAllowed(host);
-        rqdClient.restartRqdNow(host);
         // Reuse the reboot hardware states: the drain-and-recover mechanics are identical, only
-        // the scope differs (service vs machine). Leaving UP stops booking immediately, so no
-        // frame is dispatched into the short RQD outage; the restarted RQD's boot report flips
-        // the host back to UP. The state is written only after RQD accepted the request so a
-        // refused/unreachable host is left untouched.
+        // the scope differs (service vs machine). Leaving UP stops booking, and the restarted
+        // RQD's boot report flips the host back to UP. The state is written BEFORE the RPC so
+        // the dispatcher cannot book a frame into the restart window while the request is in
+        // flight; a refused/failed request restores UP (safe: the guard just verified UP).
+        verifyRestartRqdAllowed(host);
         hostDao.updateHostState(host, HardwareState.REBOOTING);
+        try {
+            rqdClient.restartRqdNow(host);
+        } catch (RuntimeException e) {
+            hostDao.updateHostState(host, HardwareState.UP);
+            throw e;
+        }
     }
 
     @Transactional(propagation = Propagation.SUPPORTS)
     public void restartRqdWhenIdle(HostInterface host) {
-        verifyRestartRqdAllowed(host);
-        rqdClient.restartRqdWhenIdle(host);
         // See restartRqdNow: REBOOT_WHEN_IDLE stops booking so the host actually drains, and
-        // clears via the boot report the restarted RQD sends once the drain completes.
+        // clears via the boot report the restarted RQD sends once the drain completes. State
+        // first, then RPC, with UP restored when the request fails.
+        verifyRestartRqdAllowed(host);
         hostDao.updateHostState(host, HardwareState.REBOOT_WHEN_IDLE);
+        try {
+            rqdClient.restartRqdWhenIdle(host);
+        } catch (RuntimeException e) {
+            hostDao.updateHostState(host, HardwareState.UP);
+            throw e;
+        }
     }
 
     /**

@@ -161,6 +161,14 @@ pub struct RunningFrame {
     #[serde(skip_serializing)]
     #[serde(skip_deserializing)]
     stats_frozen: AtomicBool,
+    /// Set once the frame is fully recovery-ready: the exit-file wrapper is in place and the
+    /// snapshot write succeeded. Read by the service-restart preconditions so RQD never exits
+    /// while a running frame could not be recovered. Transient by design (bincode snapshots
+    /// are positional): the recovery path re-arms it, since the snapshot's presence on disk is
+    /// exactly what got the frame recovered.
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
+    recovery_armed: AtomicBool,
     /// Latest host-wide memory distribution, refreshed each monitor cycle. Read by the log
     /// footer of a failing frame to expose potential memory starvation from co-tenants.
     /// Transient host state, never persisted in frame snapshots.
@@ -304,6 +312,7 @@ impl RunningFrame {
             })),
             dangling_state_registed_at: RwLock::new(None),
             stats_frozen: AtomicBool::new(false),
+            recovery_armed: AtomicBool::new(false),
             latest_host_mem_snapshot: RwLock::new(None),
         }
     }
@@ -712,6 +721,13 @@ impl RunningFrame {
         }
         let logger = Arc::new(logger_base.unwrap());
 
+        if recover_mode {
+            // The snapshot that got this frame recovered is still on disk (it is only removed
+            // once the frame finishes), so the frame stays recovery-ready for a subsequent
+            // service restart.
+            self.recovery_armed.store(true, Ordering::SeqCst);
+        }
+
         let output = if recover_mode {
             self.recover_inner(Arc::clone(&logger)).await
         } else {
@@ -798,8 +814,10 @@ impl RunningFrame {
         command.with_frame_cmd(self.request.command.clone());
         // The exit file is what lets a restarted RQD recover this frame's real exit status;
         // asking for it is also what wraps the command in the trap script. Gated by config so
-        // recovery can be switched off on a host without restarting RQD.
-        if self.config.is_frame_recovery_enabled() {
+        // recovery can be switched off on a host without restarting RQD. Read once so the
+        // wrapper and the snapshot below can't disagree if the live value flips mid-launch.
+        let recovery_enabled = self.config.is_frame_recovery_enabled();
+        if recovery_enabled {
             command.with_exit_file(self.exit_file_path.clone());
         }
         let (cmd, cmd_str) = command.build()?;
@@ -849,9 +867,17 @@ impl RunningFrame {
 
         // Make sure process has been spawned before creating a backup. Only written when frame
         // recovery is on: without the exit-file wrapper a snapshot would make a restarted RQD
-        // "recover" this frame and misreport it as killed when no exit file is found.
-        if self.config.is_frame_recovery_enabled() {
-            let _ = self.create_snapshot().await;
+        // "recover" this frame and misreport it as killed when no exit file is found. The
+        // frame counts as recovery-armed only when the snapshot write actually succeeded.
+        if recovery_enabled {
+            match self.create_snapshot().await {
+                Ok(()) => self.recovery_armed.store(true, Ordering::SeqCst),
+                Err(err) => warn!(
+                    "Failed to write snapshot for {}: {}. The frame will not survive a \
+                     service restart",
+                    self, err
+                ),
+            }
         }
 
         // Spawn a new thread to follow frame logs
@@ -929,7 +955,10 @@ impl RunningFrame {
         let raw_stderr = Self::setup_raw_file(&self.raw_stderr_path).await?;
 
         command.with_frame_cmd(self.request.command.clone());
-        if self.config.is_frame_recovery_enabled() {
+        // Read once so the wrapper and the snapshot below can't disagree if the live value
+        // flips mid-launch.
+        let recovery_enabled = self.config.is_frame_recovery_enabled();
+        if recovery_enabled {
             command.with_exit_file(self.exit_file_path.clone());
         }
         let (cmd, cmd_str) = command.build()?;
@@ -957,9 +986,17 @@ impl RunningFrame {
 
         info!("Frame {self} started with pid {pid}");
 
-        // See the unix twin above: snapshots are only useful with frame recovery on.
-        if self.config.is_frame_recovery_enabled() {
-            let _ = self.create_snapshot().await;
+        // See the unix twin above: snapshots are only useful with frame recovery on, and the
+        // frame counts as recovery-armed only when the snapshot write actually succeeded.
+        if recovery_enabled {
+            match self.create_snapshot().await {
+                Ok(()) => self.recovery_armed.store(true, Ordering::SeqCst),
+                Err(err) => warn!(
+                    "Failed to write snapshot for {}: {}. The frame will not survive a \
+                     service restart",
+                    self, err
+                ),
+            }
         }
 
         let (log_pipe_handle, sender) = self.spawn_logger(logger, false).await;
@@ -1091,6 +1128,12 @@ impl RunningFrame {
     ///
     /// This method safely accesses the thread-protected running state to retrieve
     /// the current PID of the frame process.
+    /// Whether this frame can survive a service restart: its exit-file wrapper is in place
+    /// and its snapshot was written successfully (or it was itself recovered from one).
+    pub(crate) fn is_recovery_armed(&self) -> bool {
+        self.recovery_armed.load(Ordering::SeqCst)
+    }
+
     pub(crate) fn pid(&self) -> Option<u32> {
         let state = self.state.read().unwrap_or_else(|err| err.into_inner());
         match *state {

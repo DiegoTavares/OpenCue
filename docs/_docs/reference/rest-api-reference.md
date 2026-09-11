@@ -93,7 +93,7 @@ The table below lists all 18 definitions, the interfaces in each, and how many e
 | `subscription` (Subscription Service) | SubscriptionInterface (5) | Routed |
 | `task` (Task Service) | TaskInterface (3) | Routed |
 
-Totals: **18 definitions, 28 interfaces, 304 published endpoints**, of which **273 across 22 interfaces are routed** by the gateway.
+Totals: **18 definitions, 28 interfaces, 306 published endpoints**, of which **275 across 22 interfaces are routed** by the gateway.
 
 The list is discovered at request time from `SWAGGER_DIR`, so `GET /swagger/` always reflects what the running gateway was built with.
 
@@ -132,7 +132,7 @@ Where an equivalent exists, use the routed interface instead:
 To check the routed set on your own deployment:
 
 ```bash
-# Publishes 304 endpoints
+# Publishes 306 endpoints
 curl -s http://localhost:8448/swagger/ \
   | grep -o '/swagger/specs/[a-zA-Z_]*\.swagger\.json' | sort -u \
   | while read -r s; do curl -s "http://localhost:8448$s" | jq '.paths | length'; done \
