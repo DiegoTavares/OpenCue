@@ -81,7 +81,7 @@ The table below lists all 18 definitions, the interfaces in each, and how many e
 | `depend` (Depend Service) | DependInterface (3) | Routed |
 | `facility` (Facility Service) | AllocationInterface (14), FacilityInterface (5) | Routed |
 | `filter` (Filter Service) | ActionInterface (3), FilterInterface (16), MatcherInterface (3) | Routed |
-| `host` (Host Service) | DeedInterface (3), HostInterface (23), OwnerInterface (6), ProcInterface (13) | Routed |
+| `host` (Host Service) | DeedInterface (3), HostInterface (25), OwnerInterface (6), ProcInterface (13) | Routed |
 | `job` (Job Service) | FrameInterface (18), GroupInterface (20), JobInterface (42), LayerInterface (36) | Routed |
 | `limit` (Limit Service) | LimitInterface (7) | Routed |
 | `monitoring` (Monitoring Service) | MonitoringInterface (6) | Not routed |

@@ -113,6 +113,43 @@ public class HostManagerService implements HostManager {
         }
     }
 
+    // SUPPORTS: don't pin a pooled DB connection for the duration of the blocking RQD call.
+    // The two DAO reads/writes around it are single autocommitted statements.
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public void restartRqdNow(HostInterface host) {
+        verifyRestartRqdAllowed(host);
+        rqdClient.restartRqdNow(host);
+        // Reuse the reboot hardware states: the drain-and-recover mechanics are identical, only
+        // the scope differs (service vs machine). Leaving UP stops booking immediately, so no
+        // frame is dispatched into the short RQD outage; the restarted RQD's boot report flips
+        // the host back to UP. The state is written only after RQD accepted the request so a
+        // refused/unreachable host is left untouched.
+        hostDao.updateHostState(host, HardwareState.REBOOTING);
+    }
+
+    @Transactional(propagation = Propagation.SUPPORTS)
+    public void restartRqdWhenIdle(HostInterface host) {
+        verifyRestartRqdAllowed(host);
+        rqdClient.restartRqdWhenIdle(host);
+        // See restartRqdNow: REBOOT_WHEN_IDLE stops booking so the host actually drains, and
+        // clears via the boot report the restarted RQD sends once the drain completes.
+        hostDao.updateHostState(host, HardwareState.REBOOT_WHEN_IDLE);
+    }
+
+    /**
+     * A service restart may only be requested on a host in the UP state. Anything else either
+     * cannot honor it (DOWN) or would be silently cancelled by it: the restart's boot report flips
+     * REBOOTING/REBOOT_WHEN_IDLE/REPAIR handling on its head by racing a pending machine reboot or
+     * a repair hold.
+     */
+    private void verifyRestartRqdAllowed(HostInterface host) {
+        if (!hostDao.isHostUp(host)) {
+            throw new IllegalStateException("Cannot restart the RQD service on " + host.getName()
+                    + ": host is not in the UP state (it may be down, in repair,"
+                    + " or have a reboot pending)");
+        }
+    }
+
     @Override
     public void setHostStatistics(HostInterface host, long totalMemory, long freeMemory,
             long totalSwap, long freeSwap, long totalMcp, long freeMcp, long totalGpuMemory,
