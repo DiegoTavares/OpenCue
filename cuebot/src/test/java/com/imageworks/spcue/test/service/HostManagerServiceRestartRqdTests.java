@@ -25,7 +25,7 @@ import com.imageworks.spcue.rqd.RqdClient;
 import com.imageworks.spcue.rqd.RqdClientException;
 import com.imageworks.spcue.service.HostManagerService;
 
-import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -84,7 +84,12 @@ public class HostManagerServiceRestartRqdTests {
     public void restartRqdNowRefusesWhenHostIsNotUp() {
         when(hostDao.isHostUp(host)).thenReturn(false);
 
-        assertThrows(IllegalStateException.class, () -> hostManager.restartRqdNow(host));
+        try {
+            hostManager.restartRqdNow(host);
+            fail("Expected IllegalStateException for a host that is not UP");
+        } catch (IllegalStateException expected) {
+            // Expected: the restart must be refused.
+        }
 
         verify(rqdClient, never()).restartRqdNow(any());
         verify(hostDao, never()).updateHostState(any(), any());
@@ -94,7 +99,12 @@ public class HostManagerServiceRestartRqdTests {
     public void restartRqdWhenIdleRefusesWhenHostIsNotUp() {
         when(hostDao.isHostUp(host)).thenReturn(false);
 
-        assertThrows(IllegalStateException.class, () -> hostManager.restartRqdWhenIdle(host));
+        try {
+            hostManager.restartRqdWhenIdle(host);
+            fail("Expected IllegalStateException for a host that is not UP");
+        } catch (IllegalStateException expected) {
+            // Expected: the restart must be refused.
+        }
 
         verify(rqdClient, never()).restartRqdWhenIdle(any());
         verify(hostDao, never()).updateHostState(any(), any());
@@ -105,7 +115,12 @@ public class HostManagerServiceRestartRqdTests {
         when(hostDao.isHostUp(host)).thenReturn(true);
         doThrow(new RqdClientException("rqd unreachable")).when(rqdClient).restartRqdNow(host);
 
-        assertThrows(RqdClientException.class, () -> hostManager.restartRqdNow(host));
+        try {
+            hostManager.restartRqdNow(host);
+            fail("Expected the RqdClientException to propagate");
+        } catch (RqdClientException expected) {
+            // Expected: RQD-side failures must reach the caller.
+        }
 
         verify(hostDao, never()).updateHostState(any(), any());
     }
@@ -115,7 +130,12 @@ public class HostManagerServiceRestartRqdTests {
         when(hostDao.isHostUp(host)).thenReturn(true);
         doThrow(new RqdClientException("not supported")).when(rqdClient).restartRqdWhenIdle(host);
 
-        assertThrows(RqdClientException.class, () -> hostManager.restartRqdWhenIdle(host));
+        try {
+            hostManager.restartRqdWhenIdle(host);
+            fail("Expected the RqdClientException to propagate");
+        } catch (RqdClientException expected) {
+            // Expected: RQD-side failures must reach the caller.
+        }
 
         verify(hostDao, never()).updateHostState(any(), any());
     }
